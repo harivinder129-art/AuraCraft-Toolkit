@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description"
+        content="PicToPDF is a premium client-side Image to PDF Converter. Convert images to PDF in exact original dimensions or custom page formats instantly. 100% secure, offline-capable, and gorgeous.">
+    <title>PicToPDF — Premium Image to PDF Converter</title>
+
+    <!-- Lucide Icons (Local/Offline) -->
+    <script src="lucide.min.js"></script>
+
+    <!-- HEIC/HEIF Image Converter (Local/Offline) -->
+    <script src="heic-to.js"></script>
+
+    <!-- jsPDF library (Local/Offline) -->
+    <script src="jspdf.umd.min.js"></script>
+    <!-- PDF.js library (Local/Offline) -->
+    <script src="pdf.min.js"></script>
+    <!-- Stylesheets -->
+    <link rel="stylesheet" href="styles.css?v=6">
+</head>
+
+<body class="dark-theme">
+    <script>
+        // Immediate theme preference initialization to prevent flash
+        (function () {
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            if (!prefersDark) {
+                document.body.classList.remove('dark-theme');
+                document.body.classList.add('light-theme');
+            }
+        })();
+    </script>
+    <div class="glow-bg" id="glowBg"></div>
+
+    <!-- Full-Screen Drop Anywhere Overlay -->
+    <div class="global-drop-overlay" id="globalDropOverlay" style="display: none;">
+        <div class="global-drop-content">
+            <div class="drop-circle">
+                <i data-lucide="upload-cloud" class="upload-icon"
+                    style="width: 42px; height: 42px; color: var(--accent-solid);"></i>
+            </div>
+            <h2>Drop Images or PDFs Anywhere</h2>
+            <p>Release to instantly add files to your PDF document</p>
+        </div>
+    </div>
+
+    <header class="app-header">
+        <div class="header-container">
+            <div class="logo-area">
+                <div class="logo-icon-container">
+                    <i data-lucide="file-image" class="logo-icon"></i>
+                </div>
+                <div class="logo-text">
+                    <h1>PicTo<span>PDF</span></h1>
+                    <p class="tagline">Premium Client-Side Image &amp; PDF Studio</p>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <main class="app-container">
+        <div class="grid-layout">
+            <!-- Left Side: Source/Images Management -->
+            <section class="workspace-left">
+                <!-- Dropzone area -->
+                <div class="glass-card upload-card" id="dropZone">
+                    <input type="file" id="fileInput" multiple accept="image/*,.heic,.heif,.pdf,application/pdf"
+                        class="file-hidden">
+                    <div class="drop-illustration">
+                        <div class="drop-circle">
+                            <i data-lucide="upload-cloud" class="upload-icon"></i>
+                        </div>
+                    </div>
+                    <div class="drop-text">
+                        <h3>Drag &amp; Drop or Paste your images or PDFs</h3>
+                        <p class="sub-text">Supports JPEG, PNG, WebP, SVG, GIF, HEIC, and PDF &bull; Press <kbd
+                                class="kbd-badge">Ctrl+V</kbd> to paste</p>
+                    </div>
+                    <div class="upload-actions">
+                        <button type="button" class="btn btn-secondary" id="btnBrowse">
+                            <i data-lucide="image"></i> Browse Files
+                        </button>
+                        <button type="button" class="btn btn-secondary" id="btnPaste"
+                            title="Paste Image or PDF from Clipboard (Ctrl+V)">
+                            <i data-lucide="clipboard"></i> Paste Clipboard
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Image List/Reordering Deck -->
+                <div class="glass-card list-card" id="imageListCard" style="display: none;">
+                    <div class="card-header">
+                        <div class="header-title-group">
+                            <i data-lucide="layers" class="title-icon"></i>
+                            <h2>Uploaded Items (<span id="fileCount">0</span>)</h2>
+                        </div>
+                        <button class="btn-clear-all" id="btnClearAll" title="Clear all files">
+                            <i data-lucide="trash-2"></i> Clear All
+                        </button>
+                    </div>
+
+                    <div class="image-list-container" id="imageListContainer">
+                        <!-- Uploaded items inserted here dynamically -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Side: PDF Settings and Virtual Preview -->
+            <section class="workspace-right">
+                <!-- PDF Settings Deck -->
+                <div class="glass-card settings-card collapsed">
+                    <div class="card-header border-bottom collapsible-trigger" id="settingsHeader"
+                        style="cursor: pointer; user-select: none;">
+                        <div class="header-title-group">
+                            <i data-lucide="sliders" class="title-icon"></i>
+                            <h2>Advanced Settings</h2>
+                        </div>
+                        <i data-lucide="chevron-down" class="toggle-chevron" id="settingsChevron"
+                            style="transition: transform var(--transition-normal); width: 18px; height: 18px; color: var(--text-secondary);"></i>
+                    </div>
+
+                    <div class="settings-form">
+                        <!-- Page Size Selector -->
+                        <div class="setting-group">
+                            <label for="pageSize" class="setting-label">
+                                <span>Page Size</span>
+                                <span class="label-info" title="Choose original dimensions or paper standard"><i
+                                        data-lucide="help-circle"></i></span>
+                            </label>
+                            <div class="select-wrapper">
+                                <select id="pageSize" class="custom-select">
+                                    <option value="original" selected>Original Size (Exact Dimensions)</option>
+                                    <option value="a4">A4 (210 x 297 mm)</option>
+                                    <option value="letter">US Letter (8.5" x 11")</option>
+                                    <option value="legal">US Legal (8.5" x 14")</option>
+                                    <option value="a3">A3 (297 x 420 mm)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- Orientation Tab Selectors (Only used when standard sizes are chosen) -->
+                        <div class="setting-group" id="orientationGroup" style="display: none;">
+                            <label class="setting-label">Orientation</label>
+                            <div class="tab-selector">
+                                <button type="button" class="tab-btn active" data-value="auto">
+                                    <i data-lucide="refresh-cw"></i> Auto-Detect
+                                </button>
+                                <button type="button" class="tab-btn" data-value="portrait">
+                                    <i data-lucide="file-text"></i> Portrait
+                                </button>
+                                <button type="button" class="tab-btn" data-value="landscape">
+                                    <i data-lucide="file-text" class="rotate-90"></i> Landscape
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Margins Selector -->
+                        <div class="setting-group">
+                            <label class="setting-label">Page Margins</label>
+                            <div class="tab-selector margin-selector">
+                                <button type="button" class="tab-btn active" data-value="none">
+                                    None
+                                </button>
+                                <button type="button" class="tab-btn" data-value="thin">
+                                    Thin (0.5 in)
+                                </button>
+                                <button type="button" class="tab-btn" data-value="normal">
+                                    Normal (1.0 in)
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Image Fitting Options (Only used when standard sizes are chosen) -->
+                        <div class="setting-group" id="imageFittingGroup" style="display: none;">
+                            <label for="imageFitting" class="setting-label">Image Placement</label>
+                            <div class="select-wrapper">
+                                <select id="imageFitting" class="custom-select">
+                                    <option value="fit" selected>Fit Within Margins (Keep Proportion)</option>
+                                    <option value="fill">Fill Entire Page (Crop if Needed)</option>
+                                    <option value="stretch">Stretch to Fill (No Crop, Ignores Ratio)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <!-- JPEG Compression/Quality Slider -->
+                        <div class="setting-group">
+                            <div class="setting-label-between">
+                                <label for="imageQuality" class="setting-label">Image Compression (JPEG)</label>
+                                <span class="badge" id="qualityValue">90%</span>
+                            </div>
+                            <div class="slider-wrapper">
+                                <input type="range" id="imageQuality" min="10" max="100" value="90"
+                                    class="custom-slider">
+                                <div class="slider-labels">
+                                    <span>High Compression</span>
+                                    <span>Maximum Quality</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Dynamic Size Indicator -->
+                        <div class="setting-group" id="sizeIndicatorGroup" style="display: none;">
+                            <div class="setting-label-between">
+                                <span class="setting-label">
+                                    <i data-lucide="hard-drive" class="title-icon"
+                                        style="width: 14px; height: 14px; margin-right: 2px;"></i>
+                                    Estimated PDF Size
+                                </span>
+                                <span class="badge" id="estimatedPdfSize">0 KB</span>
+                            </div>
+                        </div>
+
+                        <!-- Watermark / Stamping -->
+                        <div class="setting-group border-top pt-4">
+                            <label class="setting-label">
+                                <i data-lucide="type" class="title-icon"
+                                    style="width: 14px; height: 14px; margin-right: 4px;"></i>
+                                Document Watermark
+                            </label>
+                            <input type="text" id="watermarkText" class="custom-input" placeholder="e.g. CONFIDENTIAL">
+                            <p class="sub-text mt-2" style="font-size: 0.75rem;">Text will be stamped diagonally across
+                                every page.</p>
+                        </div>
+
+                        <!-- PDF Compilation Output Strategy -->
+                        <div class="setting-group border-top pt-4">
+                            <div class="setting-label-between">
+                                <label class="setting-label">Merge Mode</label>
+                            </div>
+                            <div class="switch-selector">
+                                <div class="switch-option active" data-value="single">
+                                    <i data-lucide="book-open"></i>
+                                    <span>Single PDF (Multi-page)</span>
+                                </div>
+                                <div class="switch-option" data-value="separate">
+                                    <i data-lucide="copy"></i>
+                                    <span>Separate PDFs (Batch)</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Security / Encryption -->
+                        <div class="setting-group border-top pt-4">
+                            <div class="setting-label-between" style="cursor: pointer;" id="togglePasswordBtn">
+                                <label class="setting-label" style="cursor: pointer;">
+                                    <i data-lucide="lock" class="title-icon"
+                                        style="width: 14px; height: 14px; margin-right: 4px;"></i>
+                                    Password Protection
+                                </label>
+                                <input type="checkbox" id="enablePassword" class="custom-checkbox"
+                                    style="width: 18px; height: 18px; cursor: pointer;">
+                            </div>
+                            <div id="passwordInputContainer" style="display: none; margin-top: 0.75rem;">
+                                <input type="password" id="pdfPassword" class="custom-input"
+                                    placeholder="Enter PDF password...">
+                                <p class="sub-text mt-2" style="font-size: 0.75rem; margin-top: 0.5rem;">PDF will be
+                                    encrypted. Password is required to open the document.</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Document Layout Live Preview -->
+                <div class="glass-card preview-card">
+                    <div class="card-header border-bottom">
+                        <div class="header-title-group">
+                            <i data-lucide="eye" class="title-icon"></i>
+                            <h2>Document Layout Preview</h2>
+                        </div>
+                    </div>
+                    <div class="preview-workspace">
+                        <div class="virtual-preview-canvas" id="virtualPreviewCanvas">
+                            <!-- Live layout is rendered inside this container dynamically -->
+                            <div class="preview-placeholder" id="previewPlaceholder">
+                                <i data-lucide="file-text" class="preview-doc-icon"></i>
+                                <p>Upload images or PDFs to view live layout mock</p>
+                            </div>
+                        </div>
+
+                        <!-- Navigation indicators if multi-page -->
+                        <div class="preview-pagination" id="previewPagination" style="display: none;">
+                            <button class="btn-circle" id="prevPreview" aria-label="Previous Page">
+                                <i data-lucide="chevron-left"></i>
+                            </button>
+                            <span class="pagination-text">Page <strong id="currentPreviewPage">1</strong> of <strong
+                                    id="totalPreviewPages">1</strong></span>
+                            <button class="btn-circle" id="nextPreview" aria-label="Next Page">
+                                <i data-lucide="chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="card-footer" style="display: flex; gap: 0.75rem; flex-direction: column;">
+                        <button type="button" class="btn btn-primary btn-glow-active w-full" id="btnConvert" disabled>
+                            <span class="btn-text"><i data-lucide="file-down"></i> Export to PDF</span>
+                            <span class="btn-loading" style="display: none;">
+                                <svg class="spinner" viewBox="0 0 50 50">
+                                    <circle class="path" cx="25" cy="25" r="20" fill="none" stroke-width="5"></circle>
+                                </svg>
+                                Compiling pages... <span id="compilationProgress">0%</span>
+                            </span>
+                    </div>
+                </div>
+            </section>n>
+        </div>
+    </main>
+
+    <footer class="app-footer">
+        <div class="footer-content">
+            <p>&copy; 2026 PicToPDF. Safe &amp; Protected: Images are processed entirely inside your browser sandbox. No
+                server data transfer.</p>
+            <div class="footer-links">
+                <a href="#dropZone"><i data-lucide="arrow-up" class="w-4 h-4"></i> Back to Top</a>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Edit Modal Popup -->
+    <div class="crop-modal-overlay" id="editModal" style="display: none;">
+        <div class="glass-card edit-modal-card">
+            <div class="card-header border-bottom">
+                <div class="header-title-group">
+                    <i data-lucide="sliders" class="title-icon"></i>
+                    <h2>Edit Image</h2>
+                </div>
+                <button type="button" class="btn-circle" id="closeEditModal" aria-label="Close">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+            <div class="edit-modal-body">
+                <!-- Sidebar Tools -->
+                <div class="edit-sidebar">
+                    <div class="edit-tabs">
+                        <button type="button" class="edit-tab-btn active" data-tab="tab-crop">
+                            <i data-lucide="crop"></i> Crop & Rotate
+                        </button>
+                        <button type="button" class="edit-tab-btn" data-tab="tab-filters">
+                            <i data-lucide="aperture"></i> Filters
+                        </button>
+                        <button type="button" class="edit-tab-btn" data-tab="tab-layout">
+                            <i data-lucide="layout"></i> Page Layout
+                        </button>
+                    </div>
+
+                    <!-- Crop & Rotate Panel -->
+                    <div class="edit-panel active" id="tab-crop">
+                        <div class="setting-group" style="margin-bottom: 0;">
+                            <label class="setting-label-between"
+                                style="cursor: pointer; display: flex; justify-content: space-between; align-items: center;">
+                                <span><i data-lucide="scan"
+                                        style="width: 14px; height: 14px; vertical-align: middle; margin-right: 4px;"></i>
+                                    Perspective Crop</span>
+                                <input type="checkbox" id="togglePerspective"
+                                    style="width: 18px; height: 18px; cursor: pointer;">
+                            </label>
+                        </div>
+
+                        <div class="setting-group mt-2">
+                            <label class="setting-label">Aspect Ratio</label>
+                            <div class="select-wrapper">
+                                <select id="cropAspectRatio" class="custom-select">
+                                    <option value="free" selected>Freeform</option>
+                                    <option value="1:1">Square (1:1)</option>
+                                    <option value="4:3">Standard (4:3)</option>
+                                    <option value="16:9">Widescreen (16:9)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="setting-group mt-4">
+                            <label class="setting-label">Rotation</label>
+                            <div style="display: flex; gap: 0.5rem;">
+                                <button type="button" class="btn btn-secondary flex-1" id="btnRotateLeft">
+                                    <i data-lucide="rotate-ccw"></i> Left
+                                </button>
+                                <button type="button" class="btn btn-secondary flex-1" id="btnRotateRight">
+                                    <i data-lucide="rotate-cw"></i> Right
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Filters Panel -->
+                    <div class="edit-panel" id="tab-filters">
+                        <div class="setting-group">
+                            <div class="setting-label-between">
+                                <label class="setting-label">Brightness</label>
+                                <span class="badge" id="valBrightness">100%</span>
+                            </div>
+                            <input type="range" id="filterBrightness" min="0" max="200" value="100"
+                                class="custom-slider">
+                        </div>
+                        <div class="setting-group">
+                            <div class="setting-label-between">
+                                <label class="setting-label">Contrast</label>
+                                <span class="badge" id="valContrast">100%</span>
+                            </div>
+                            <input type="range" id="filterContrast" min="0" max="200" value="100" class="custom-slider">
+                        </div>
+                        <div class="setting-group">
+                            <div class="setting-label-between">
+                                <label class="setting-label">Grayscale</label>
+                                <span class="badge" id="valGrayscale">0%</span>
+                            </div>
+                            <input type="range" id="filterGrayscale" min="0" max="100" value="0" class="custom-slider">
+                        </div>
+                        <div class="setting-group">
+                            <div class="setting-label-between">
+                                <label class="setting-label">Sepia</label>
+                                <span class="badge" id="valSepia">0%</span>
+                            </div>
+                            <input type="range" id="filterSepia" min="0" max="100" value="0" class="custom-slider">
+                        </div>
+                        <button type="button" class="btn btn-secondary w-full mt-4" id="btnResetFilters">
+                            <i data-lucide="refresh-cw"></i> Reset Filters
+                        </button>
+                    </div>
+
+                    <!-- Page Layout Panel -->
+                    <div class="edit-panel" id="tab-layout">
+                        <p class="sub-text mb-4">Override global settings for this specific image.</p>
+                        <div class="setting-group">
+                            <label class="setting-label">Page Size</label>
+                            <div class="select-wrapper">
+                                <select id="overridePageSize" class="custom-select">
+                                    <option value="global" selected>Use Global Setting</option>
+                                    <option value="original">Original Size</option>
+                                    <option value="a4">A4</option>
+                                    <option value="letter">US Letter</option>
+                                    <option value="legal">US Legal</option>
+                                    <option value="a3">A3</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="setting-group mt-4">
+                            <label class="setting-label">Margins</label>
+                            <div class="select-wrapper">
+                                <select id="overrideMargin" class="custom-select">
+                                    <option value="global" selected>Use Global Setting</option>
+                                    <option value="none">None</option>
+                                    <option value="thin">Thin (0.5 in)</option>
+                                    <option value="normal">Normal (1.0 in)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="edit-main-area">
+                    <button type="button" class="fullscreen-close-btn" id="exitFullScreenCrop" aria-label="Close Full View" title="Exit Full View">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                    <div class="crop-workspace-container" style="flex: 1;">
+                        <div class="crop-workspace" id="cropWorkspace">
+                            <img id="cropSourceImage" src="" alt="Source to Edit" draggable="false">
+                            <div class="crop-box" id="cropBox">
+                                <div class="crop-handle tl"></div>
+                                <div class="crop-handle tr"></div>
+                                <div class="crop-handle bl"></div>
+                                <div class="crop-handle br" id="cropResizeHandle"></div>
+                                <div class="crop-handle t"></div>
+                                <div class="crop-handle b"></div>
+                                <div class="crop-handle l"></div>
+                                <div class="crop-handle r"></div>
+                                <div class="crop-grid-line h1"></div>
+                                <div class="crop-grid-line h2"></div>
+                                <div class="crop-grid-line v1"></div>
+                                <div class="crop-grid-line v2"></div>
+                            </div>
+                            <svg id="perspectiveSvg"
+                                style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: none; z-index: 40;">
+                                <polygon id="perspectivePolygon" points="0,0 100,0 100,100 0,100"
+                                    style="fill:rgba(139, 92, 246, 0.2);stroke:rgba(255,255,255,0.85);stroke-width:2;stroke-dasharray:4 4;" />
+                            </svg>
+                            <div id="perspectiveHandles"
+                                style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 50;">
+                                <div class="perspective-handle" id="ph-tl" style="pointer-events: auto;"></div>
+                                <div class="perspective-handle" id="ph-tr" style="pointer-events: auto;"></div>
+                                <div class="perspective-handle" id="ph-br" style="pointer-events: auto;"></div>
+                                <div class="perspective-handle" id="ph-bl" style="pointer-events: auto;"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="crop-actions mt-4" style="justify-content: flex-end;">
+                        <button type="button" class="btn btn-secondary" id="toggleFullScreenEdit" title="Full Screen Crop"><i data-lucide="maximize" style="width: 16px; height: 16px;"></i> Full View</button>
+                        <button type="button" class="btn btn-secondary" id="btnCancelEdit">Cancel</button>
+                        <button type="button" class="btn btn-primary btn-glow-active" id="btnApplyEdit">Apply Edits</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- App JavaScript -->
+    <script src="app.js?v=3"></script>
+</body>
+
+</html>
