@@ -634,9 +634,7 @@ async function processPdfFile(file) {
             const dataLength = headerIndex !== -1 ? base64Length - headerIndex - 1 : base64Length;
             const approxBytes = Math.round(dataLength * 0.75);
 
-            const pageName = pdf.numPages > 1
-                ? `${file.name} (Page ${pageNum} of ${pdf.numPages})`
-                : file.name;
+            const pageName = file.name;
 
             const pageRecord = {
                 id: Date.now() + Math.random().toString(36).substr(2, 5),
