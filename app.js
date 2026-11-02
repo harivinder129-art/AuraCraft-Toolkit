@@ -849,8 +849,24 @@ async function processFiles(files) {
         });
     }
 
-    // Execute parallel file tasks (handling both PDF documents & Images concurrently)
-    const fileTasks = validFiles.map(async (file) => {
+    // Execute bounded parallel file tasks. This uses available cores without
+    // creating hundreds of simultaneous decoders and exhausting browser memory.
+    async function runParallelPool(items, worker, concurrency) {
+        const results = new Array(items.length);
+        let nextIndex = 0;
+        const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+            while (nextIndex < items.length) {
+                const index = nextIndex++;
+                results[index] = await worker(items[index], index);
+            }
+        });
+        await Promise.all(workers);
+        return results;
+    }
+
+    const hardwareConcurrency = navigator.hardwareConcurrency || 4;
+    const fileConcurrency = Math.max(4, Math.min(16, hardwareConcurrency));
+    const resultsArray = await runParallelPool(validFiles, async (file) => {
         const ext = file.name ? file.name.split('.').pop().toLowerCase() : '';
         const isPdf = ext === 'pdf' || (file.type && file.type === 'application/pdf');
 
@@ -862,9 +878,7 @@ async function processFiles(files) {
                 return [];
             });
         }
-    });
-
-    const resultsArray = await Promise.all(fileTasks);
+    }, fileConcurrency);
     const allRecords = resultsArray.flat().filter(rec => rec !== null && rec !== undefined);
 
     if (allRecords.length > 0) {
@@ -956,23 +970,22 @@ function renderUploadedGrid() {
 
         const isEdited = fileObj.dataUrl !== fileObj.originalDataUrl || fileObj.filters || fileObj.rotation || fileObj.pageSizeOverride || fileObj.marginOverride;
         const individualSize = fileObj.exactPdfSize || fileObj.estimatedPdfSize || 0;
-        const sizeDisplay = individualSize ? formatFileSize(individualSize) : 'Calculating...';
+        const sizeDisplay = individualSize ? formatFileSize(individualSize) : 'wait';
 
         const qualityLabel = fileObj.quality === 100 ? 'Original' : `${fileObj.quality || 90}%`;
 
         item.innerHTML = `
             <img src="${fileObj.dataUrl}" alt="${fileObj.name}" class="node-thumbnail">
             <div class="node-details">
-                <h4>${fileObj.name}</h4>
+                <h4><span class="node-order" title="Upload order">${index + 1}</span>${fileObj.name}</h4>
                 <div class="node-meta" style="margin-bottom: 6px;">
                     <span class="badge-dim">${fileObj.width} x ${fileObj.height} px</span>
-                    ${fileObj.isPdfPage ? '<span class="badge badge-pdf">PDF Page</span>' : ''}
                     ${isEdited ? '<span class="badge cropped-badge">Edited</span>' : ''}
                     <span class="meta-divider"></span>
                     <span class="meta-text" title="Original File Size">${fileObj.sizeText}</span>
                     <span class="meta-divider"></span>
                     <span class="badge individual-pdf-size-badge" data-index="${index}" style="background-color: rgba(139, 92, 246, 0.08); color: var(--accent-solid); font-weight: 600;" title="Estimated PDF size for this page">
-                        PDF Size: ${sizeDisplay}
+                        Size: ${sizeDisplay}
                     </span>
                 </div>
                 
@@ -1003,11 +1016,11 @@ function renderUploadedGrid() {
                 <button type="button" class="btn-circle" title="Move Up" ${isFirst ? 'disabled' : ''} onclick="swapFiles(${index}, ${index - 1})">
                     <i data-lucide="chevron-up"></i>
                 </button>
-                <button type="button" class="btn-circle" title="Move Down" ${isLast ? 'disabled' : ''} onclick="swapFiles(${index}, ${index + 1})">
-                    <i data-lucide="chevron-down"></i>
-                </button>
                 <button type="button" class="btn-circle btn-circle-delete" title="Remove image" onclick="removeFile(${index})">
                     <i data-lucide="trash-2"></i>
+                </button>
+                <button type="button" class="btn-circle" title="Move Down" ${isLast ? 'disabled' : ''} onclick="swapFiles(${index}, ${index + 1})">
+                    <i data-lucide="chevron-down"></i>
                 </button>
             </div>
         `;
@@ -1023,7 +1036,7 @@ function renderUploadedGrid() {
             inlineBadge.textContent = val === 100 ? 'Original' : `${val}%`;
 
             // Fast recalculate size approximation
-            recalculateEstimatedPDFSize();
+            recalculateEstimatedPDFSize(parseInt(inlineSlider.getAttribute('data-index')));
         });
 
         // Prevent HTML5 Drag and Drop from interrupting slider usage
@@ -1379,7 +1392,7 @@ async function downloadSingleImage(index) {
 
 
 // Compile the PDF document exactly according to active settings
-async function compilePDFDocument(progressCallback) {
+async function compilePDFDocument(progressCallback, cancellationToken = null) {
     const count = STATE.files.length;
     if (count === 0) return null;
 
@@ -1393,6 +1406,7 @@ async function compilePDFDocument(progressCallback) {
         });
 
         for (let i = 0; i < count; i++) {
+            if (cancellationToken && cancellationToken.cancelled) return null;
             if (progressCallback) await progressCallback(i, count);
 
             const imgData = STATE.files[i];
@@ -1406,6 +1420,7 @@ async function compilePDFDocument(progressCallback) {
 
             // Save exact individual size contribution inside state
             imgData.exactPdfSize = imageBytes + 1500;
+            imgData.sizeFingerprint = getFileSizeFingerprint(imgData);
 
             const usedPageSize = (imgData.pageSizeOverride && imgData.pageSizeOverride !== 'global') ? imgData.pageSizeOverride : STATE.settings.pageSize;
             const usedMargin = (imgData.marginOverride && imgData.marginOverride !== 'global') ? imgData.marginOverride : STATE.settings.margin;
@@ -1468,6 +1483,7 @@ async function compilePDFDocument(progressCallback) {
         });
 
         for (let i = 0; i < count; i++) {
+            if (cancellationToken && cancellationToken.cancelled) return null;
             if (progressCallback) await progressCallback(i, count);
 
             const imgData = STATE.files[i];
@@ -1518,6 +1534,7 @@ async function compilePDFDocument(progressCallback) {
 
             // Save exact individual PDF blob size in state
             imgData.exactPdfSize = itemBlob.size;
+            imgData.sizeFingerprint = getFileSizeFingerprint(imgData);
 
             docs.push(itemDoc);
             blobs.push(itemBlob);
@@ -1539,36 +1556,74 @@ function applyWatermark(doc, pageConfig, text) {
     });
 }
 
-// Compress client-side using standard offscreen HTML canvas drawing contexts
-function processQualityRatio(dataUrl, mimeType, quality) {
-    return new Promise((resolve) => {
+// Compress client-side using bounded parallel OffscreenCanvas tasks.
+let activeCanvasTasks = 0;
+const canvasTaskWaiters = [];
+
+async function runCanvasTask(task) {
+    const concurrency = Math.max(4, Math.min(16, navigator.hardwareConcurrency || 4));
+
+    activeCanvasTasks++;
+    if (activeCanvasTasks > concurrency) {
+        await new Promise(resolve => canvasTaskWaiters.push(resolve));
+    }
+
+    try {
+        return await task();
+    } finally {
+        activeCanvasTasks--;
+        const next = canvasTaskWaiters.shift();
+        if (next) next();
+    }
+}
+
+async function processQualityRatio(dataUrl, mimeType, quality) {
+    return runCanvasTask(async () => {
         // No compression for full lossless representations or vector formats
         if (quality === 100 || mimeType === 'image/svg+xml') {
             const format = mimeType.includes('png') ? 'PNG' : 'JPEG';
-            resolve({ url: dataUrl, format: format });
-            return;
+            return { url: dataUrl, format: format };
         }
 
-        const img = new Image();
-        img.onload = function () {
-            const canvas = document.createElement('canvas');
-            canvas.width = img.width;
-            canvas.height = img.height;
-            const ctx = canvas.getContext('2d');
+        if (typeof createImageBitmap === 'function') {
+            const response = await fetch(dataUrl);
+            const blob = await response.blob();
+            const bitmap = await createImageBitmap(blob);
 
-            ctx.drawImage(img, 0, 0);
+            if (typeof OffscreenCanvas !== 'undefined') {
+                const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(bitmap, 0, 0);
+                bitmap.close();
+                const jpegBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: quality / 100 });
+                const url = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(jpegBlob);
+                });
+                return { url, format: 'JPEG' };
+            }
 
-            // Export as compressed JPEG format representation
-            const qualityDecimal = quality / 100;
-            const compressedUrl = canvas.toDataURL('image/jpeg', qualityDecimal);
+            bitmap.close();
+        }
 
-            // Release GPU canvas memory immediately
-            canvas.width = 0;
-            canvas.height = 0;
-
-            resolve({ url: compressedUrl, format: 'JPEG' });
-        };
-        img.src = dataUrl;
+        return new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = function () {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                const compressedUrl = canvas.toDataURL('image/jpeg', quality / 100);
+                canvas.width = 0;
+                canvas.height = 0;
+                resolve({ url: compressedUrl, format: 'JPEG' });
+            };
+            img.onerror = reject;
+            img.src = dataUrl;
+        });
     });
 }
 
@@ -1689,8 +1744,88 @@ function delay(ms) {
 
 // Recalculate estimated PDF size based on selected quality and files in queue
 let exactSizeTimeout = null;
+let sizeCalculationGeneration = 0;
+let activeSizeCancellationToken = null;
 
-function recalculateEstimatedPDFSize() {
+function getFileSizeFingerprint(fileObj) {
+    return [
+        fileObj.id,
+        fileObj.editCount || 0,
+        fileObj.quality || 90,
+        STATE.settings.imageQuality,
+        STATE.settings.pageSize,
+        STATE.settings.orientation,
+        STATE.settings.margin,
+        STATE.settings.imageFitting,
+        STATE.settings.mergeMode,
+        fileObj.pageSizeOverride || 'global',
+        fileObj.marginOverride || 'global',
+        STATE.settings.enablePassword ? STATE.settings.pdfPassword : '',
+        STATE.settings.watermarkText || ''
+    ].join('|');
+}
+
+async function calculateSingleImagePdfSize(fileObj, index) {
+    const quality = fileObj.quality || STATE.settings.imageQuality;
+    const processedImage = await processQualityRatio(fileObj.dataUrl, fileObj.type, quality);
+    const fingerprint = getFileSizeFingerprint(fileObj);
+    let exactSize;
+
+    if (STATE.settings.mergeMode === 'separate') {
+        const usedPageSize = fileObj.pageSizeOverride && fileObj.pageSizeOverride !== 'global'
+            ? fileObj.pageSizeOverride
+            : STATE.settings.pageSize;
+        const usedMargin = fileObj.marginOverride && fileObj.marginOverride !== 'global'
+            ? fileObj.marginOverride
+            : STATE.settings.margin;
+        const pageConfig = getPageDimensionsAndImageBounds(
+            fileObj.width,
+            fileObj.height,
+            usedPageSize,
+            STATE.settings.orientation,
+            usedMargin,
+            STATE.settings.imageFitting
+        );
+        const itemDoc = new jsPDF({
+            orientation: pageConfig.pageW > pageConfig.pageH ? 'l' : 'p',
+            unit: 'pt',
+            format: [pageConfig.pageW, pageConfig.pageH]
+        });
+        itemDoc.addImage(processedImage.url, processedImage.format,
+            pageConfig.imgX, pageConfig.imgY, pageConfig.imgW, pageConfig.imgH);
+        if (STATE.settings.watermarkText) {
+            applyWatermark(itemDoc, pageConfig, STATE.settings.watermarkText);
+        }
+        exactSize = itemDoc.output('blob').size;
+    } else {
+        const dataLength = processedImage.url.split(',')[1] || '';
+        const imageBytes = Math.round(dataLength.length * 0.75);
+        exactSize = imageBytes + 1500;
+    }
+
+    if (STATE.files[index] === fileObj && getFileSizeFingerprint(fileObj) === fingerprint) {
+        fileObj.exactPdfSize = exactSize;
+        fileObj.sizeFingerprint = fingerprint;
+        updateIndividualSizeBadges();
+        updateEstimatedTotalFromIndividualSizes();
+    }
+}
+
+function updateEstimatedTotalFromIndividualSizes() {
+    const allCalculated = STATE.files.length > 0 && STATE.files.every(fileObj => {
+        return Boolean(fileObj.exactPdfSize) && fileObj.sizeFingerprint === getFileSizeFingerprint(fileObj);
+    });
+
+    if (!allCalculated) return;
+
+    const totalSize = STATE.files.reduce((sum, fileObj) => sum + fileObj.exactPdfSize, 0);
+    if (DOM.estimatedPdfSize) {
+        const label = STATE.settings.mergeMode === 'separate' ? 'Batch Total' : 'Size';
+        DOM.estimatedPdfSize.textContent = `${label}: ${formatFileSize(totalSize)}`;
+    }
+}
+
+function recalculateEstimatedPDFSize(targetIndex = null) {
     if (STATE.files.length === 0) {
         if (DOM.sizeIndicatorGroup) {
             DOM.sizeIndicatorGroup.style.display = 'none';
@@ -1731,17 +1866,42 @@ function recalculateEstimatedPDFSize() {
         return; // STOP execution. Do not start timeout or background compiler.
     }
 
-    // Cache miss: clear exact sizes and show Calculating...
-    STATE.files.forEach(fileObj => {
-        fileObj.exactPdfSize = null;
+    // Clear only stale individual sizes. Unchanged cards keep their exact cached values.
+    const staleIndexes = STATE.files.map((fileObj, index) => {
+        const fingerprint = getFileSizeFingerprint(fileObj);
+        const isStale = fileObj.sizeFingerprint !== fingerprint;
+        return targetIndex === null || index === targetIndex
+            ? (isStale ? index : -1)
+            : -1;
+    }).filter(index => index >= 0);
+
+    staleIndexes.forEach(index => {
+        STATE.files[index].exactPdfSize = null;
     });
 
     if (DOM.estimatedPdfSize) {
-        DOM.estimatedPdfSize.textContent = "...";
+        DOM.estimatedPdfSize.textContent = "wait";
     }
 
-    // Update individual page badges instantly during dragging/updating
     updateIndividualSizeBadges();
+    updateEstimatedTotalFromIndividualSizes();
+
+    // Calculate stale cards independently and in parallel.
+    Promise.all(staleIndexes.map(index => calculateSingleImagePdfSize(STATE.files[index], index)))
+        .then(() => updateEstimatedTotalFromIndividualSizes())
+        .catch(error => console.warn('Failed to calculate individual image size:', error));
+
+    if (targetIndex !== null) {
+        sizeCalculationGeneration++;
+        if (activeSizeCancellationToken) {
+            activeSizeCancellationToken.cancelled = true;
+        }
+        if (exactSizeTimeout) {
+            clearTimeout(exactSizeTimeout);
+            exactSizeTimeout = null;
+        }
+        return;
+    }
 
     // 2. Debounced Exact Compiled Size Calculation
     if (exactSizeTimeout) {
@@ -1751,10 +1911,16 @@ function recalculateEstimatedPDFSize() {
     const watermarkCheck = STATE.settings.watermarkText;
     const enablePasswordCheck = STATE.settings.enablePassword;
     const passwordCheck = STATE.settings.pdfPassword;
+    sizeCalculationGeneration++;
+    const cancellationToken = { cancelled: false };
+    activeSizeCancellationToken = cancellationToken;
+    const generation = sizeCalculationGeneration;
 
     exactSizeTimeout = setTimeout(async () => {
         try {
-            const result = await compilePDFDocument();
+            const result = await compilePDFDocument(undefined, cancellationToken);
+            if (cancellationToken.cancelled || generation !== sizeCalculationGeneration) return;
+
             if (!result) return;
 
             const currentFingerprint = STATE.files.map(f => f.id + '-' + (f.editCount || 0)).join(',');
@@ -1809,7 +1975,7 @@ function updateIndividualSizeBadges() {
             if (fileObj.exactPdfSize) {
                 badge.textContent = `Size: ${formatFileSize(fileObj.exactPdfSize)}`;
             } else {
-                badge.textContent = `Size: ...`;
+                badge.textContent = `wait`;
             }
         }
     });
@@ -2539,7 +2705,7 @@ function applyImageEdits() {
 
         closeEditInterface();
         updateUIState();
-        recalculateEstimatedPDFSize();
+        recalculateEstimatedPDFSize(index);
     };
     img.src = editState.tempDataUrl;
 }
@@ -2569,7 +2735,7 @@ function resetEdits(index) {
         fileObj.sizeText = formatFileSize(imageBytes);
 
         updateUIState();
-        recalculateEstimatedPDFSize();
+        recalculateEstimatedPDFSize(index);
     };
     img.src = fileObj.originalDataUrl;
 }
