@@ -1854,6 +1854,10 @@ function openEditInterface(index) {
     editState.pageSizeOverride = fileObj.pageSizeOverride || 'global';
     editState.marginOverride = fileObj.marginOverride || 'global';
 
+    const editSidebar = DOM.editModal.querySelector('.edit-sidebar');
+    if (editSidebar) editSidebar.classList.add('controls-open');
+    DOM.editModal.classList.add('controls-open');
+
     // Set UI elements
     DOM.cropAspectRatio.value = 'free';
     DOM.overridePageSize.value = editState.pageSizeOverride;
@@ -1997,12 +2001,22 @@ function initEditEvents() {
     // Tabs switching
     document.querySelectorAll('.edit-tab-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
+            const target = e.currentTarget;
+            const sidebar = DOM.editModal.querySelector('.edit-sidebar');
+            const wasActive = target.classList.contains('active');
+            const isOpen = sidebar ? sidebar.classList.contains('controls-open') : false;
+
             document.querySelectorAll('.edit-tab-btn').forEach(b => b.classList.remove('active'));
             document.querySelectorAll('.edit-panel').forEach(p => p.classList.remove('active'));
 
-            const target = e.currentTarget;
+            const panel = document.getElementById(target.getAttribute('data-tab'));
             target.classList.add('active');
-            document.getElementById(target.getAttribute('data-tab')).classList.add('active');
+            panel.classList.add('active');
+
+            if (sidebar) {
+                sidebar.classList.add('controls-open');
+                DOM.editModal.classList.add('controls-open');
+            }
         });
     });
 
@@ -2040,6 +2054,21 @@ function initEditEvents() {
     // 1. Close actions
     DOM.closeEditModal.addEventListener('click', closeEditInterface);
     DOM.btnCancelEdit.addEventListener('click', closeEditInterface);
+
+    const mobileRevertEdit = document.getElementById('mobileRevertEdit');
+    if (mobileRevertEdit) {
+        mobileRevertEdit.addEventListener('click', () => {
+            if (editState.index >= 0) {
+                resetEdits(editState.index);
+                closeEditInterface();
+            }
+        });
+    }
+
+    const mobileSaveEdit = document.getElementById('mobileSaveEdit');
+    if (mobileSaveEdit) {
+        mobileSaveEdit.addEventListener('click', applyImageEdits);
+    }
 
     // Fullscreen toggle
     const toggleFullscreenFunc = () => {
@@ -2321,6 +2350,9 @@ function endEditPointer() {
 function closeEditInterface() {
     DOM.editModal.style.display = 'none';
     DOM.editModal.classList.remove('fullscreen-mode');
+    DOM.editModal.classList.remove('controls-open');
+    const editSidebar = DOM.editModal.querySelector('.edit-sidebar');
+    if (editSidebar) editSidebar.classList.remove('controls-open');
     const mainArea = DOM.editModal.querySelector('.edit-main-area');
     if (mainArea) {
         mainArea.classList.remove('fullscreen-crop');

@@ -19,7 +19,7 @@
     <!-- PDF.js library (Local/Offline) -->
     <script src="pdf.min.js"></script>
     <!-- Stylesheets -->
-    <link rel="stylesheet" href="styles.css?v=6">
+    <link rel="stylesheet" href="styles.css?v=20">
 </head>
 
 <body class="dark-theme">
@@ -321,27 +321,31 @@
     <!-- Edit Modal Popup -->
     <div class="crop-modal-overlay" id="editModal" style="display: none;">
         <div class="glass-card edit-modal-card">
-            <div class="card-header border-bottom">
+            <div class="card-header border-bottom edit-mobile-header">
                 <div class="header-title-group">
                     <i data-lucide="sliders" class="title-icon"></i>
                     <h2>Edit Image</h2>
                 </div>
-                <button type="button" class="btn-circle" id="closeEditModal" aria-label="Close">
-                    <i data-lucide="x"></i>
-                </button>
+                <div class="edit-mobile-actions">
+                    <button type="button" class="edit-mobile-revert" id="mobileRevertEdit">Revert</button>
+                    <button type="button" class="edit-mobile-save" id="mobileSaveEdit">Save</button>
+                    <button type="button" class="btn-circle" id="closeEditModal" aria-label="Close">
+                        <i data-lucide="x"></i>
+                    </button>
+                </div>
             </div>
             <div class="edit-modal-body">
                 <!-- Sidebar Tools -->
                 <div class="edit-sidebar">
                     <div class="edit-tabs">
                         <button type="button" class="edit-tab-btn active" data-tab="tab-crop">
-                            <i data-lucide="crop"></i> Crop & Rotate
+                            <i data-lucide="crop"></i><span class="edit-tab-label">Crop</span>
                         </button>
                         <button type="button" class="edit-tab-btn" data-tab="tab-filters">
-                            <i data-lucide="aperture"></i> Filters
+                            <i data-lucide="aperture"></i><span class="edit-tab-label">Filters</span>
                         </button>
                         <button type="button" class="edit-tab-btn" data-tab="tab-layout">
-                            <i data-lucide="layout"></i> Page Layout
+                            <i data-lucide="layout"></i><span class="edit-tab-label">Layout</span>
                         </button>
                     </div>
 
@@ -373,10 +377,10 @@
                             <label class="setting-label">Rotation</label>
                             <div style="display: flex; gap: 0.5rem;">
                                 <button type="button" class="btn btn-secondary flex-1" id="btnRotateLeft">
-                                    <i data-lucide="rotate-ccw"></i> Left
+                                    <i data-lucide="rotate-ccw"></i><span class="rotation-label"> Left</span>
                                 </button>
                                 <button type="button" class="btn btn-secondary flex-1" id="btnRotateRight">
-                                    <i data-lucide="rotate-cw"></i> Right
+                                    <i data-lucide="rotate-cw"></i><span class="rotation-label"> Right</span>
                                 </button>
                             </div>
                         </div>
@@ -498,7 +502,7 @@
     </div>
 
     <!-- App JavaScript -->
-    <script src="app.js?v=3"></script>
+    <script src="app.js?v=10"></script>
 </body>
 
 </html>
