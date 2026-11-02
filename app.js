@@ -2003,6 +2003,9 @@ let editState = {
     ]
 };
 
+let editPreviewFrame = null;
+let editPreviewGeneration = 0;
+
 function openEditInterface(index) {
     const fileObj = STATE.files[index];
     if (!fileObj) return;
@@ -2060,70 +2063,65 @@ function updateFilterBadges() {
 function updateEditPreview(resetCropBox = false) {
     const fileObj = STATE.files[editState.index];
     if (!fileObj) return;
+    if (editPreviewFrame !== null) {
+        cancelAnimationFrame(editPreviewFrame);
+    }
 
-    const img = new Image();
-    img.onload = function () {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
+    const generation = ++editPreviewGeneration;
+    editPreviewFrame = requestAnimationFrame(() => {
+        editPreviewFrame = null;
+        const img = new Image();
+        img.onload = function () {
+            if (generation !== editPreviewGeneration) return;
 
-        // Handle Rotation bounds
-        let cw = img.width;
-        let ch = img.height;
-        if (editState.rotation % 180 !== 0) {
-            cw = img.height;
-            ch = img.width;
-        }
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
 
-        canvas.width = cw;
-        canvas.height = ch;
-
-        // Apply CSS Filters
-        ctx.filter = `brightness(${editState.filters.brightness}%) contrast(${editState.filters.contrast}%) grayscale(${editState.filters.grayscale}%) sepia(${editState.filters.sepia}%)`;
-
-        // Apply Transform
-        ctx.translate(cw / 2, ch / 2);
-        ctx.rotate(editState.rotation * Math.PI / 180);
-        ctx.drawImage(img, -img.width / 2, -img.height / 2);
-
-        // Save to temp state and UI
-        editState.tempDataUrl = canvas.toDataURL(fileObj.type, 1.0);
-
-        // Clean GPU
-        canvas.width = 0; canvas.height = 0;
-
-        DOM.cropSourceImage.onload = () => {
-            if (resetCropBox) {
-                setTimeout(() => {
-                    const displayedW = DOM.cropSourceImage.clientWidth;
-                    const displayedH = DOM.cropSourceImage.clientHeight;
-
-                    const boxW = displayedW;
-                    const boxH = displayedH;
-                    const boxL = 0;
-                    const boxT = 0;
-
-                    DOM.cropBox.style.left = boxL + 'px';
-                    DOM.cropBox.style.top = boxT + 'px';
-                    DOM.cropBox.style.width = boxW + 'px';
-                    DOM.cropBox.style.height = boxH + 'px';
-
-                    DOM.cropWorkspace.style.width = displayedW + 'px';
-                    DOM.cropWorkspace.style.height = displayedH + 'px';
-
-                    // Reset perspective points to corners
-                    editState.perspectivePoints = [
-                        { x: 0, y: 0 },
-                        { x: displayedW, y: 0 },
-                        { x: displayedW, y: displayedH },
-                        { x: 0, y: displayedH }
-                    ];
-                    updatePerspectiveUI();
-                }, 50);
+            let cw = img.width;
+            let ch = img.height;
+            if (editState.rotation % 180 !== 0) {
+                cw = img.height;
+                ch = img.width;
             }
+
+            canvas.width = cw;
+            canvas.height = ch;
+            ctx.filter = `brightness(${editState.filters.brightness}%) contrast(${editState.filters.contrast}%) grayscale(${editState.filters.grayscale}%) sepia(${editState.filters.sepia}%)`;
+            ctx.translate(cw / 2, ch / 2);
+            ctx.rotate(editState.rotation * Math.PI / 180);
+            ctx.drawImage(img, -img.width / 2, -img.height / 2);
+
+            editState.tempDataUrl = canvas.toDataURL(fileObj.type, 1.0);
+            canvas.width = 0;
+            canvas.height = 0;
+
+            DOM.cropSourceImage.onload = () => {
+                if (resetCropBox) {
+                    setTimeout(() => {
+                        const displayedW = DOM.cropSourceImage.clientWidth;
+                        const displayedH = DOM.cropSourceImage.clientHeight;
+
+                        DOM.cropBox.style.left = '0px';
+                        DOM.cropBox.style.top = '0px';
+                        DOM.cropBox.style.width = displayedW + 'px';
+                        DOM.cropBox.style.height = displayedH + 'px';
+                        DOM.cropWorkspace.style.width = displayedW + 'px';
+                        DOM.cropWorkspace.style.height = displayedH + 'px';
+
+                        editState.perspectivePoints = [
+                            { x: 0, y: 0 },
+                            { x: displayedW, y: 0 },
+                            { x: displayedW, y: displayedH },
+                            { x: 0, y: displayedH }
+                        ];
+                        updatePerspectiveUI();
+                    }, 50);
+                }
+            };
+            DOM.cropSourceImage.src = editState.tempDataUrl;
         };
-        DOM.cropSourceImage.src = editState.tempDataUrl;
-    };
-    img.src = fileObj.originalDataUrl;
+        img.src = fileObj.originalDataUrl;
+    });
 }
 
 function updatePerspectiveUI() {
@@ -2371,10 +2369,21 @@ function initEditEvents() {
     });
 
     // 4. Mouse movement tracking
+    let editPointerFrame = null;
+    let latestEditPointerEvent = null;
     window.addEventListener('pointermove', (e) => {
         if (editState.dragging || editState.resizing || editState.perspectiveDraggingNode !== null) {
             e.preventDefault();
-            handlePointerMove(e);
+            latestEditPointerEvent = e;
+            if (editPointerFrame === null) {
+                editPointerFrame = requestAnimationFrame(() => {
+                    editPointerFrame = null;
+                    if (latestEditPointerEvent) {
+                        handlePointerMove(latestEditPointerEvent);
+                        latestEditPointerEvent = null;
+                    }
+                });
+            }
         }
     }, { passive: false });
 

@@ -474,7 +474,8 @@ body {
     display: flex;
     align-items: center;
     gap: 0.6rem;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    white-space: nowrap;
 }
 
 .meta-text {
@@ -2229,31 +2230,52 @@ body {
     }
 
     .node-meta {
-        align-items: flex-start;
+        align-items: center;
+        flex-wrap: nowrap;
+        white-space: nowrap;
+        overflow: hidden;
     }
 
     .individual-pdf-size-badge {
-        overflow-wrap: anywhere;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .node-meta .badge-dim,
+    .node-meta .meta-text,
+    .node-meta .badge,
+    .node-meta .individual-pdf-size-badge {
+        font-size: 0.58rem !important;
+        line-height: 1;
+        padding: 0.08rem 0.2rem !important;
+        flex-shrink: 0;
+    }
+
+    .node-meta .meta-divider {
+        flex-shrink: 0;
     }
 
     .node-details > div:last-child {
-        display: grid !important;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        display: flex !important;
+        flex-wrap: wrap;
+        align-items: center;
         width: 100%;
         gap: 0.35rem;
-        flex-wrap: nowrap;
     }
 
     .node-details > div:last-child .btn-crop-node {
-        width: 100%;
+        flex: 1 1 0;
+        width: auto;
         min-width: 0;
-        min-height: 34px;
-        padding: 0.35rem 0.2rem !important;
-        font-size: 0.65rem !important;
+        min-height: 28px;
+        height: 28px;
+        padding: 0.2rem 0.25rem !important;
+        font-size: 0.62rem !important;
         gap: 0.2rem;
-        white-space: normal;
+        white-space: nowrap;
         line-height: 1.15;
-        overflow: visible;
+        overflow: hidden;
         text-overflow: clip;
     }
 
@@ -2264,7 +2286,7 @@ body {
     }
 
     .node-details > div:last-child .btn-crop-node:nth-child(4) {
-        grid-column: 1 / -1;
+        flex: 0 0 auto;
         width: 100%;
     }
 
@@ -2389,7 +2411,7 @@ body {
     }
 }
 
-@media (max-width: 380px) {
+@media (max-width: 400px) {
     .preview-pagination {
         gap: 0.45rem;
         padding-inline: 0.45rem;
