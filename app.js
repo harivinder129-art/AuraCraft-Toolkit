@@ -443,6 +443,33 @@ function handleFileSelection(e) {
     }
 }
 
+function applyLargeUploadDefaults() {
+    STATE.settings.pageSize = 'original';
+    STATE.settings.imageQuality = 100;
+
+    DOM.pageSize.value = 'original';
+    DOM.qualitySlider.value = 100;
+    DOM.qualityValue.textContent = 'Original';
+
+    if (DOM.orientationGroup) DOM.orientationGroup.style.display = 'none';
+    if (DOM.imageFittingGroup) DOM.imageFittingGroup.style.display = 'none';
+
+    STATE.files.forEach(fileObj => {
+        fileObj.quality = 100;
+        fileObj.exactPdfSize = null;
+        fileObj.sizeFingerprint = null;
+    });
+
+    DOM.imageListContainer.querySelectorAll('.inline-quality-slider').forEach(slider => {
+        slider.value = 100;
+    });
+    DOM.imageListContainer.querySelectorAll('.inline-quality-badge').forEach(badge => {
+        badge.textContent = 'Original';
+    });
+
+    showToast('More than 50 pages: Page Size and Quality set to Original (100%)');
+}
+
 /* ==========================================================================
    Clipboard & Paste Mechanics
    ========================================================================== */
@@ -886,6 +913,9 @@ async function processFiles(files) {
     if (allRecords.length > 0) {
         STATE.files.push(...allRecords);
         STATE.activePageIdx = STATE.files.length - 1; // Set last loaded page active
+        if (STATE.files.length > 50) {
+            applyLargeUploadDefaults();
+        }
         updateUIState();
     }
 
