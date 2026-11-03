@@ -624,6 +624,33 @@ body {
     white-space: nowrap;
 }
 
+.size-value-badge,
+.individual-pdf-size-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.size-label,
+.size-unit {
+    pointer-events: none;
+}
+
+.size-number {
+    display: inline-block;
+    text-align: left;
+}
+
+.size-number-updating {
+    animation: sizeNumberUpdate 180ms ease-out;
+}
+
+@keyframes sizeNumberUpdate {
+    0% { opacity: 0.45; }
+    100% { opacity: 1; }
+}
+
 /* Elegant dropdown selectors */
 .select-wrapper {
     position: relative;

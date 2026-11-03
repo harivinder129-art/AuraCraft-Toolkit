@@ -338,7 +338,11 @@ function initEventListeners() {
         inlineBadges.forEach(badge => {
             badge.textContent = val === 100 ? 'Original' : `${val}%`;
         });
+    });
 
+    DOM.qualitySlider.addEventListener('change', () => {
+        // The browser emits "change" once the user finishes adjusting the slider.
+        // Calculate the PDF size only for the final quality value, not for every drag step.
         recalculateEstimatedPDFSize();
     });
 
@@ -902,6 +906,47 @@ function formatFileSize(bytes) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
+function updateSizeBadge(badge, label, bytes) {
+    if (!badge) return;
+
+    const isWaiting = typeof bytes === 'string' && bytes.toLowerCase() === 'wait';
+    const formatted = isWaiting ? 'wait' : (typeof bytes === 'number' ? formatFileSize(bytes) : String(bytes || ''));
+    const match = formatted.match(/^([\d.]+)\s*(Bytes|KB|MB)$/i);
+    const number = isWaiting ? 'wait' : (match ? match[1] : formatted);
+    const unit = isWaiting ? '' : (match ? match[2] : '');
+
+    let labelEl = badge.querySelector('.size-label');
+    let numberEl = badge.querySelector('.size-number');
+    let unitEl = badge.querySelector('.size-unit');
+
+    if (!labelEl || !numberEl || !unitEl) {
+        badge.innerHTML = `
+            <span class="size-label">${label}</span>
+            <span class="size-number">${number}</span>
+            <span class="size-unit">${unit}</span>
+        `;
+        labelEl = badge.querySelector('.size-label');
+        numberEl = badge.querySelector('.size-number');
+        unitEl = badge.querySelector('.size-unit');
+    } else {
+        labelEl.textContent = `${label}:`;
+        const valueChanged = numberEl.textContent !== number || unitEl.textContent !== unit;
+        numberEl.textContent = number;
+        unitEl.textContent = unit;
+        if (!valueChanged) return;
+    }
+
+    if (badge._sizeAnimationTimer) {
+        clearTimeout(badge._sizeAnimationTimer);
+    }
+    numberEl.classList.remove('size-number-updating');
+    void numberEl.offsetWidth;
+    numberEl.classList.add('size-number-updating');
+    badge._sizeAnimationTimer = setTimeout(() => {
+        numberEl.classList.remove('size-number-updating');
+    }, 180);
+}
+
 
 
 function clearAllFiles() {
@@ -983,7 +1028,9 @@ function renderUploadedGrid() {
                     <span class="meta-text" title="Original File Size">${fileObj.sizeText}</span>
                     <span class="meta-divider"></span>
                     <span class="badge individual-pdf-size-badge" data-index="${index}" style="background-color: rgba(139, 92, 246, 0.08); color: var(--accent-solid); font-weight: 600;" title="Estimated PDF size for this page">
-                        Size: ${sizeDisplay}
+                        <span class="size-label">Size:</span>
+                        <span class="size-number">${individualSize ? formatFileSize(individualSize).split(' ')[0] : '0'}</span>
+                        <span class="size-unit">${individualSize ? formatFileSize(individualSize).split(' ')[1] : 'KB'}</span>
                     </span>
                 </div>
                 
@@ -1032,8 +1079,10 @@ function renderUploadedGrid() {
             const val = parseInt(e.target.value);
             fileObj.quality = val;
             inlineBadge.textContent = val === 100 ? 'Original' : `${val}%`;
+        });
 
-            // Fast recalculate size approximation
+        inlineSlider.addEventListener('change', () => {
+            // Calculate only after the user stops dragging this image's quality slider.
             recalculateEstimatedPDFSize(parseInt(inlineSlider.getAttribute('data-index')));
         });
 
@@ -1557,6 +1606,7 @@ function applyWatermark(doc, pageConfig, text) {
 // Compress client-side using bounded parallel OffscreenCanvas tasks.
 let activeCanvasTasks = 0;
 const canvasTaskWaiters = [];
+const qualityRatioCache = new Map();
 
 async function runCanvasTask(task) {
     const concurrency = Math.max(4, Math.min(16, navigator.hardwareConcurrency || 4));
@@ -1576,7 +1626,17 @@ async function runCanvasTask(task) {
 }
 
 async function processQualityRatio(dataUrl, mimeType, quality) {
-    return runCanvasTask(async () => {
+    let qualityCache = qualityRatioCache.get(dataUrl);
+    if (!qualityCache) {
+        qualityCache = new Map();
+        qualityRatioCache.set(dataUrl, qualityCache);
+    }
+    const cacheKey = `${quality}|${mimeType}`;
+    if (qualityCache.has(cacheKey)) {
+        return qualityCache.get(cacheKey);
+    }
+
+    const processingPromise = runCanvasTask(async () => {
         // No compression for full lossless representations or vector formats
         if (quality === 100 || mimeType === 'image/svg+xml') {
             const format = mimeType.includes('png') ? 'PNG' : 'JPEG';
@@ -1623,6 +1683,8 @@ async function processQualityRatio(dataUrl, mimeType, quality) {
             img.src = dataUrl;
         });
     });
+    qualityCache.set(cacheKey, processingPromise);
+    return processingPromise;
 }
 
 // Coordinate calculation systems (Original / Margins / Alignment fitting)
@@ -1814,12 +1876,17 @@ function updateEstimatedTotalFromIndividualSizes() {
         return Boolean(fileObj.exactPdfSize) && fileObj.sizeFingerprint === getFileSizeFingerprint(fileObj);
     });
 
-    if (!allCalculated) return;
+    if (!allCalculated) {
+        if (DOM.estimatedPdfSize) {
+            updateSizeBadge(DOM.estimatedPdfSize, STATE.settings.mergeMode === 'separate' ? 'Batch Total' : 'Size', 'wait');
+        }
+        return;
+    }
 
     const totalSize = STATE.files.reduce((sum, fileObj) => sum + fileObj.exactPdfSize, 0);
     if (DOM.estimatedPdfSize) {
         const label = STATE.settings.mergeMode === 'separate' ? 'Batch Total' : 'Size';
-        DOM.estimatedPdfSize.textContent = `${label}: ${formatFileSize(totalSize)}`;
+        updateSizeBadge(DOM.estimatedPdfSize, label, totalSize);
     }
 }
 
@@ -1857,7 +1924,7 @@ function recalculateEstimatedPDFSize(targetIndex = null) {
         // Cache hit! Skip background processing completely
         if (DOM.estimatedPdfSize) {
             const label = STATE.settings.mergeMode === 'separate' ? 'Batch Total' : 'Size';
-            DOM.estimatedPdfSize.textContent = `${label}: ${formatFileSize(STATE.compiledCache.data.size)}`;
+            updateSizeBadge(DOM.estimatedPdfSize, label, STATE.compiledCache.data.size);
         }
 
         updateIndividualSizeBadges();
@@ -1876,10 +1943,6 @@ function recalculateEstimatedPDFSize(targetIndex = null) {
     staleIndexes.forEach(index => {
         STATE.files[index].exactPdfSize = null;
     });
-
-    if (DOM.estimatedPdfSize) {
-        DOM.estimatedPdfSize.textContent = "wait";
-    }
 
     updateIndividualSizeBadges();
     updateEstimatedTotalFromIndividualSizes();
@@ -1937,7 +2000,7 @@ function recalculateEstimatedPDFSize(targetIndex = null) {
 
                 if (DOM.estimatedPdfSize) {
                     const label = STATE.settings.mergeMode === 'separate' ? 'Batch Total' : 'Size';
-                    DOM.estimatedPdfSize.textContent = `${label}: ${formatFileSize(result.size)}`;
+                    updateSizeBadge(DOM.estimatedPdfSize, label, result.size);
                 }
 
                 updateIndividualSizeBadges();
@@ -1971,9 +2034,9 @@ function updateIndividualSizeBadges() {
         const fileObj = STATE.files[idx];
         if (fileObj) {
             if (fileObj.exactPdfSize) {
-                badge.textContent = `Size: ${formatFileSize(fileObj.exactPdfSize)}`;
+                updateSizeBadge(badge, 'Size', fileObj.exactPdfSize);
             } else {
-                badge.textContent = `wait`;
+                updateSizeBadge(badge, 'Size', 'wait');
             }
         }
     });
