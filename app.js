@@ -325,7 +325,14 @@ function initEventListeners() {
         // Bulk update all files
         STATE.files.forEach(fileObj => {
             fileObj.quality = val;
+            fileObj.exactPdfSize = null;
+            fileObj.sizeFingerprint = null;
         });
+        STATE.compiledCache = null;
+        updateIndividualSizeBadges();
+        if (DOM.estimatedPdfSize) {
+            updateSizeBadge(DOM.estimatedPdfSize, STATE.settings.mergeMode === 'separate' ? 'Batch Total' : 'Size', 'wait');
+        }
 
         // Update all displayed inline sliders in the list dynamically
         const inlineSliders = DOM.imageListContainer.querySelectorAll('.inline-quality-slider');
@@ -1042,7 +1049,9 @@ function renderUploadedGrid() {
         const isLast = index === STATE.files.length - 1;
 
         const isEdited = fileObj.dataUrl !== fileObj.originalDataUrl || fileObj.filters || fileObj.rotation || fileObj.pageSizeOverride || fileObj.marginOverride;
-        const individualSize = fileObj.exactPdfSize || fileObj.estimatedPdfSize || 0;
+        const sizeIsCurrent = fileObj.exactPdfSize &&
+            fileObj.sizeFingerprint === getFileSizeFingerprint(fileObj);
+        const individualSize = sizeIsCurrent ? fileObj.exactPdfSize : 0;
         const sizeDisplay = individualSize ? formatFileSize(individualSize) : 'wait';
 
         const qualityLabel = fileObj.quality === 100 ? 'Original' : `${fileObj.quality || 90}%`;
@@ -1109,6 +1118,11 @@ function renderUploadedGrid() {
             const val = parseInt(e.target.value);
             fileObj.quality = val;
             inlineBadge.textContent = val === 100 ? 'Original' : `${val}%`;
+            fileObj.exactPdfSize = null;
+            fileObj.sizeFingerprint = null;
+            STATE.compiledCache = null;
+            updateIndividualSizeBadges();
+            updateEstimatedTotalFromIndividualSizes();
         });
 
         inlineSlider.addEventListener('change', () => {
@@ -1392,7 +1406,7 @@ async function convertImagesToPDF() {
 
         // Check cache
         let compiledResult = null;
-        if (STATE.compiledCache &&
+        const compiledCacheMatches = STATE.compiledCache &&
             STATE.compiledCache.pageSize === STATE.settings.pageSize &&
             STATE.compiledCache.orientation === STATE.settings.orientation &&
             STATE.compiledCache.margin === STATE.settings.margin &&
@@ -1404,8 +1418,9 @@ async function convertImagesToPDF() {
             STATE.compiledCache.enablePassword === STATE.settings.enablePassword &&
             STATE.compiledCache.pdfPassword === STATE.settings.pdfPassword &&
             STATE.compiledCache.watermarkText === STATE.settings.watermarkText &&
-            STATE.compiledCache.data) {
+            STATE.compiledCache.data;
 
+        if (compiledCacheMatches) {
             compiledResult = STATE.compiledCache.data;
             progressEl.textContent = '100%';
         } else {
@@ -1938,7 +1953,7 @@ function recalculateEstimatedPDFSize(targetIndex = null) {
     const fingerprint = STATE.files.map(f => f.id + '-' + (f.editCount || 0)).join(',');
     const qFingerprint = STATE.files.map(f => f.quality || 90).join(',');
 
-    if (STATE.compiledCache &&
+    const compiledCacheMatches = STATE.compiledCache &&
         STATE.compiledCache.pageSize === STATE.settings.pageSize &&
         STATE.compiledCache.orientation === STATE.settings.orientation &&
         STATE.compiledCache.margin === STATE.settings.margin &&
@@ -1949,7 +1964,13 @@ function recalculateEstimatedPDFSize(targetIndex = null) {
         STATE.compiledCache.qualitiesFingerprint === qFingerprint &&
         STATE.compiledCache.enablePassword === STATE.settings.enablePassword &&
         STATE.compiledCache.pdfPassword === STATE.settings.pdfPassword &&
-        STATE.compiledCache.watermarkText === STATE.settings.watermarkText) {
+        STATE.compiledCache.watermarkText === STATE.settings.watermarkText;
+    const individualSizesAreCurrent = STATE.files.every(fileObj =>
+        Boolean(fileObj.exactPdfSize) &&
+        fileObj.sizeFingerprint === getFileSizeFingerprint(fileObj)
+    );
+
+    if (compiledCacheMatches && individualSizesAreCurrent) {
 
         // Cache hit! Skip background processing completely
         if (DOM.estimatedPdfSize) {
@@ -2063,7 +2084,9 @@ function updateIndividualSizeBadges() {
         const idx = parseInt(badge.getAttribute('data-index'));
         const fileObj = STATE.files[idx];
         if (fileObj) {
-            if (fileObj.exactPdfSize) {
+            const sizeIsCurrent = fileObj.exactPdfSize &&
+                fileObj.sizeFingerprint === getFileSizeFingerprint(fileObj);
+            if (sizeIsCurrent) {
                 updateSizeBadge(badge, 'Size', fileObj.exactPdfSize);
             } else {
                 updateSizeBadge(badge, 'Size', 'wait');
