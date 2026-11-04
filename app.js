@@ -317,39 +317,43 @@ function initEventListeners() {
     }
 
     // Quality slider
+    let bulkQualityPreviewTimer = null;
     DOM.qualitySlider.addEventListener('input', (e) => {
         const val = parseInt(e.target.value);
         STATE.settings.imageQuality = val;
         DOM.qualityValue.textContent = val === 100 ? 'Original' : `${val}%`;
 
-        // Bulk update all files
-        STATE.files.forEach(fileObj => {
-            fileObj.quality = val;
-            fileObj.exactPdfSize = null;
-            fileObj.sizeFingerprint = null;
-        });
-        STATE.compiledCache = null;
-        updateIndividualSizeBadges();
-        if (DOM.estimatedPdfSize) {
-            updateSizeBadge(DOM.estimatedPdfSize, STATE.settings.mergeMode === 'separate' ? 'Batch Total' : 'Size', 'wait');
-        }
-
-        // Update all displayed inline sliders in the list dynamically
-        const inlineSliders = DOM.imageListContainer.querySelectorAll('.inline-quality-slider');
-        const inlineBadges = DOM.imageListContainer.querySelectorAll('.inline-quality-badge');
-
-        inlineSliders.forEach(slider => {
-            slider.value = val;
-        });
-
-        inlineBadges.forEach(badge => {
-            badge.textContent = val === 100 ? 'Original' : `${val}%`;
-        });
+        // Do one batched DOM update after dragging pauses instead of scanning every card
+        // on every pointer/input event.
+        if (bulkQualityPreviewTimer !== null) clearTimeout(bulkQualityPreviewTimer);
+        bulkQualityPreviewTimer = setTimeout(() => {
+            bulkQualityPreviewTimer = null;
+            DOM.imageListContainer.querySelectorAll('.inline-quality-slider').forEach(slider => {
+                slider.value = val;
+            });
+            DOM.imageListContainer.querySelectorAll('.inline-quality-badge').forEach(badge => {
+                badge.textContent = val === 100 ? 'Original' : `${val}%`;
+            });
+        }, 80);
     });
 
     DOM.qualitySlider.addEventListener('change', () => {
         // The browser emits "change" once the user finishes adjusting the slider.
         // Calculate the PDF size only for the final quality value, not for every drag step.
+        if (bulkQualityPreviewTimer !== null) {
+            clearTimeout(bulkQualityPreviewTimer);
+            bulkQualityPreviewTimer = null;
+        }
+
+        const val = STATE.settings.imageQuality;
+        STATE.files.forEach(fileObj => {
+            if (fileObj.quality === val) return;
+            fileObj.quality = val;
+            fileObj.exactPdfSize = null;
+            fileObj.sizeFingerprint = null;
+        });
+        STATE.compiledCache = null;
+
         recalculateEstimatedPDFSize();
     });
 
@@ -1113,6 +1117,7 @@ function renderUploadedGrid() {
         const inlineSlider = item.querySelector('.inline-quality-slider');
         const inlineBadge = item.querySelector('.inline-quality-badge');
         const inlineControlRow = item.querySelector('.inline-quality-control');
+        let inlineQualityPreviewFrame = null;
 
         inlineSlider.addEventListener('input', (e) => {
             const val = parseInt(e.target.value);
@@ -1121,12 +1126,20 @@ function renderUploadedGrid() {
             fileObj.exactPdfSize = null;
             fileObj.sizeFingerprint = null;
             STATE.compiledCache = null;
-            updateIndividualSizeBadges();
-            updateEstimatedTotalFromIndividualSizes();
+            if (inlineQualityPreviewFrame !== null) cancelAnimationFrame(inlineQualityPreviewFrame);
+            inlineQualityPreviewFrame = requestAnimationFrame(() => {
+                inlineQualityPreviewFrame = null;
+                updateIndividualSizeBadges();
+                updateEstimatedTotalFromIndividualSizes();
+            });
         });
 
         inlineSlider.addEventListener('change', () => {
             // Calculate only after the user stops dragging this image's quality slider.
+            if (inlineQualityPreviewFrame !== null) {
+                cancelAnimationFrame(inlineQualityPreviewFrame);
+                inlineQualityPreviewFrame = null;
+            }
             recalculateEstimatedPDFSize(parseInt(inlineSlider.getAttribute('data-index')));
         });
 
@@ -2146,6 +2159,8 @@ let editState = {
 
 let editPreviewFrame = null;
 let editPreviewGeneration = 0;
+let editPreviewTimer = null;
+let editPreviewObjectUrl = null;
 
 function openEditInterface(index) {
     const fileObj = STATE.files[index];
@@ -2207,61 +2222,82 @@ function updateEditPreview(resetCropBox = false) {
     if (editPreviewFrame !== null) {
         cancelAnimationFrame(editPreviewFrame);
     }
+    if (editPreviewTimer !== null) {
+        clearTimeout(editPreviewTimer);
+    }
 
     const generation = ++editPreviewGeneration;
     editPreviewFrame = requestAnimationFrame(() => {
         editPreviewFrame = null;
-        const img = new Image();
-        img.onload = function () {
-            if (generation !== editPreviewGeneration) return;
+        editPreviewTimer = setTimeout(() => {
+            editPreviewTimer = null;
+            const img = new Image();
+            img.onload = function () {
+                if (generation !== editPreviewGeneration) return;
 
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
 
-            let cw = img.width;
-            let ch = img.height;
-            if (editState.rotation % 180 !== 0) {
-                cw = img.height;
-                ch = img.width;
-            }
-
-            canvas.width = cw;
-            canvas.height = ch;
-            ctx.filter = `brightness(${editState.filters.brightness}%) contrast(${editState.filters.contrast}%) grayscale(${editState.filters.grayscale}%) sepia(${editState.filters.sepia}%)`;
-            ctx.translate(cw / 2, ch / 2);
-            ctx.rotate(editState.rotation * Math.PI / 180);
-            ctx.drawImage(img, -img.width / 2, -img.height / 2);
-
-            editState.tempDataUrl = canvas.toDataURL(fileObj.type, 1.0);
-            canvas.width = 0;
-            canvas.height = 0;
-
-            DOM.cropSourceImage.onload = () => {
-                if (resetCropBox) {
-                    setTimeout(() => {
-                        const displayedW = DOM.cropSourceImage.clientWidth;
-                        const displayedH = DOM.cropSourceImage.clientHeight;
-
-                        DOM.cropBox.style.left = '0px';
-                        DOM.cropBox.style.top = '0px';
-                        DOM.cropBox.style.width = displayedW + 'px';
-                        DOM.cropBox.style.height = displayedH + 'px';
-                        DOM.cropWorkspace.style.width = displayedW + 'px';
-                        DOM.cropWorkspace.style.height = displayedH + 'px';
-
-                        editState.perspectivePoints = [
-                            { x: 0, y: 0 },
-                            { x: displayedW, y: 0 },
-                            { x: displayedW, y: displayedH },
-                            { x: 0, y: displayedH }
-                        ];
-                        updatePerspectiveUI();
-                    }, 50);
+                let cw = img.width;
+                let ch = img.height;
+                if (editState.rotation % 180 !== 0) {
+                    cw = img.height;
+                    ch = img.width;
                 }
+
+                // Preview resolution is intentionally capped. Filters/crop interaction
+                // must not process the full multi-megapixel image on every input event.
+                const previewScale = Math.min(1, 1600 / Math.max(cw, ch));
+                cw = Math.max(1, Math.round(cw * previewScale));
+                ch = Math.max(1, Math.round(ch * previewScale));
+
+                canvas.width = cw;
+                canvas.height = ch;
+                ctx.filter = `brightness(${editState.filters.brightness}%) contrast(${editState.filters.contrast}%) grayscale(${editState.filters.grayscale}%) sepia(${editState.filters.sepia}%)`;
+                ctx.translate(cw / 2, ch / 2);
+                ctx.rotate(editState.rotation * Math.PI / 180);
+                ctx.drawImage(img, -img.width * previewScale / 2, -img.height * previewScale / 2, img.width * previewScale, img.height * previewScale);
+
+                canvas.toBlob((blob) => {
+                    if (!blob || generation !== editPreviewGeneration) {
+                        canvas.width = 0;
+                        canvas.height = 0;
+                        return;
+                    }
+                    const previewUrl = URL.createObjectURL(blob);
+                    if (editPreviewObjectUrl) URL.revokeObjectURL(editPreviewObjectUrl);
+                    editPreviewObjectUrl = previewUrl;
+                    editState.tempDataUrl = previewUrl;
+                    canvas.width = 0;
+                    canvas.height = 0;
+
+                    DOM.cropSourceImage.onload = () => {
+                        if (!resetCropBox) return;
+                        setTimeout(() => {
+                            const displayedW = DOM.cropSourceImage.clientWidth;
+                            const displayedH = DOM.cropSourceImage.clientHeight;
+                            if (!displayedW || !displayedH) return;
+
+                            DOM.cropBox.style.left = '0px';
+                            DOM.cropBox.style.top = '0px';
+                            DOM.cropBox.style.width = displayedW + 'px';
+                            DOM.cropBox.style.height = displayedH + 'px';
+                            DOM.cropWorkspace.style.width = displayedW + 'px';
+                            DOM.cropWorkspace.style.height = displayedH + 'px';
+                            editState.perspectivePoints = [
+                                { x: 0, y: 0 },
+                                { x: displayedW, y: 0 },
+                                { x: displayedW, y: displayedH },
+                                { x: 0, y: displayedH }
+                            ];
+                            updatePerspectiveUI();
+                        }, 50);
+                    };
+                    DOM.cropSourceImage.src = previewUrl;
+                }, fileObj.type === 'image/png' ? 'image/png' : 'image/jpeg', 0.82);
             };
-            DOM.cropSourceImage.src = editState.tempDataUrl;
-        };
-        img.src = fileObj.originalDataUrl;
+            img.src = fileObj.originalDataUrl;
+        }, 50);
     });
 }
 
@@ -2328,13 +2364,18 @@ function initEditEvents() {
     DOM.btnRotateRight.addEventListener('click', () => { editState.rotation = (editState.rotation + 90) % 360; updateEditPreview(true); });
 
     // Filters (live preview using input)
+    let filterPreviewTimer = null;
     const applyFilters = (resetCrop = false) => {
         editState.filters.brightness = parseInt(DOM.filterBrightness.value);
         editState.filters.contrast = parseInt(DOM.filterContrast.value);
         editState.filters.grayscale = parseInt(DOM.filterGrayscale.value);
         editState.filters.sepia = parseInt(DOM.filterSepia.value);
         updateFilterBadges();
-        updateEditPreview(resetCrop);
+        if (filterPreviewTimer !== null) clearTimeout(filterPreviewTimer);
+        filterPreviewTimer = setTimeout(() => {
+            filterPreviewTimer = null;
+            updateEditPreview(resetCrop);
+        }, 80);
     };
 
     DOM.filterBrightness.addEventListener('input', () => applyFilters(false));
@@ -2662,6 +2703,15 @@ function endEditPointer() {
 }
 
 function closeEditInterface() {
+    ++editPreviewGeneration;
+    if (editPreviewTimer !== null) {
+        clearTimeout(editPreviewTimer);
+        editPreviewTimer = null;
+    }
+    if (editPreviewObjectUrl) {
+        URL.revokeObjectURL(editPreviewObjectUrl);
+        editPreviewObjectUrl = null;
+    }
     DOM.editModal.style.display = 'none';
     DOM.editModal.classList.remove('fullscreen-mode');
     DOM.editModal.classList.remove('controls-open');
@@ -2789,63 +2839,93 @@ function applyPerspectiveWarp(srcImg, pts, scaleX, scaleY) {
     return outCanvas;
 }
 
-function applyImageEdits() {
+async function applyImageEdits() {
     const index = editState.index;
     const fileObj = STATE.files[index];
-    if (!fileObj || !editState.tempDataUrl) return;
+    if (!fileObj) return;
 
     fileObj.editCount = (fileObj.editCount || 0) + 1;
+    if (DOM.btnApplyEdit) {
+        DOM.btnApplyEdit.disabled = true;
+        DOM.btnApplyEdit.classList.add('is-processing');
+    }
 
-    const displayedW = DOM.cropSourceImage.clientWidth;
-    const displayedH = DOM.cropSourceImage.clientHeight;
+    await new Promise(resolve => requestAnimationFrame(resolve));
 
-    const img = new Image();
-    img.onload = function () {
-        // Find natural bounds of the pre-processed (rotated/filtered) image
-        const scaleX = img.width / displayedW;
-        const scaleY = img.height / displayedH;
+    try {
+        const img = await new Promise((resolve, reject) => {
+            const source = new Image();
+            source.onload = () => resolve(source);
+            source.onerror = () => reject(new Error('Could not load image for editing'));
+            source.src = fileObj.originalDataUrl;
+        });
 
+        let bakedW = img.width;
+        let bakedH = img.height;
+        if (editState.rotation % 180 !== 0) {
+            bakedW = img.height;
+            bakedH = img.width;
+        }
+
+        const bakedCanvas = document.createElement('canvas');
+        bakedCanvas.width = bakedW;
+        bakedCanvas.height = bakedH;
+        const bakedCtx = bakedCanvas.getContext('2d');
+        bakedCtx.filter = `brightness(${editState.filters.brightness}%) contrast(${editState.filters.contrast}%) grayscale(${editState.filters.grayscale}%) sepia(${editState.filters.sepia}%)`;
+        bakedCtx.translate(bakedW / 2, bakedH / 2);
+        bakedCtx.rotate(editState.rotation * Math.PI / 180);
+        bakedCtx.drawImage(img, -img.width / 2, -img.height / 2);
+
+        const displayedW = DOM.cropSourceImage.clientWidth;
+        const displayedH = DOM.cropSourceImage.clientHeight;
+        const scaleX = bakedW / displayedW;
+        const scaleY = bakedH / displayedH;
         let finalCanvas;
-        let finalW, finalH;
 
         if (editState.perspectiveMode) {
-            finalCanvas = applyPerspectiveWarp(img, editState.perspectivePoints, scaleX, scaleY);
-            finalW = finalCanvas.width;
-            finalH = finalCanvas.height;
+            finalCanvas = applyPerspectiveWarp(bakedCanvas, editState.perspectivePoints, scaleX, scaleY);
         } else {
-            const boxLeft = parseInt(DOM.cropBox.style.left);
-            const boxTop = parseInt(DOM.cropBox.style.top);
-            const boxWidth = parseInt(DOM.cropBox.style.width);
-            const boxHeight = parseInt(DOM.cropBox.style.height);
-
-            finalW = Math.round(boxWidth * scaleX);
-            finalH = Math.round(boxHeight * scaleY);
-            const cropX = Math.round(boxLeft * scaleX);
-            const cropY = Math.round(boxTop * scaleY);
+            const boxLeft = parseInt(DOM.cropBox.style.left) || 0;
+            const boxTop = parseInt(DOM.cropBox.style.top) || 0;
+            const boxWidth = parseInt(DOM.cropBox.style.width) || displayedW;
+            const boxHeight = parseInt(DOM.cropBox.style.height) || displayedH;
+            const finalW = Math.max(1, Math.round(boxWidth * scaleX));
+            const finalH = Math.max(1, Math.round(boxHeight * scaleY));
+            const cropX = Math.max(0, Math.round(boxLeft * scaleX));
+            const cropY = Math.max(0, Math.round(boxTop * scaleY));
 
             finalCanvas = document.createElement('canvas');
             finalCanvas.width = finalW;
             finalCanvas.height = finalH;
-            const ctx = finalCanvas.getContext('2d');
-
-            // Final crop of the baked image
-            ctx.drawImage(img, cropX, cropY, finalW, finalH, 0, 0, finalW, finalH);
+            finalCanvas.getContext('2d').drawImage(
+                bakedCanvas, cropX, cropY, finalW, finalH, 0, 0, finalW, finalH
+            );
         }
 
-        const croppedDataUrl = finalCanvas.toDataURL(fileObj.type, 0.95);
-        finalCanvas.width = 0; finalCanvas.height = 0;
+        const finalW = finalCanvas.width;
+        const finalH = finalCanvas.height;
+        const outputType = fileObj.type === 'image/png' ? 'image/png' : 'image/jpeg';
+        const outputBlob = await new Promise(resolve => {
+            finalCanvas.toBlob(resolve, outputType, outputType === 'image/jpeg' ? 0.95 : undefined);
+        });
+        if (!outputBlob) throw new Error('Could not encode edited image');
 
-        const base64Length = croppedDataUrl.length;
-        const headerIndex = croppedDataUrl.indexOf(',');
-        const dataLength = headerIndex !== -1 ? base64Length - headerIndex - 1 : base64Length;
-        const imageBytes = Math.round(dataLength * 0.75);
+        const croppedDataUrl = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(outputBlob);
+        });
 
-        // Save applied edits back to fileObj
+        bakedCanvas.width = 0;
+        bakedCanvas.height = 0;
+        finalCanvas.width = 0;
+        finalCanvas.height = 0;
+
         fileObj.dataUrl = croppedDataUrl;
         fileObj.width = finalW;
         fileObj.height = finalH;
-        fileObj.sizeText = formatFileSize(imageBytes);
-
+        fileObj.sizeText = formatFileSize(outputBlob.size);
         fileObj.rotation = editState.rotation;
         fileObj.filters = { ...editState.filters };
         fileObj.pageSizeOverride = editState.pageSizeOverride;
@@ -2854,8 +2934,12 @@ function applyImageEdits() {
         closeEditInterface();
         updateUIState();
         recalculateEstimatedPDFSize(index);
-    };
-    img.src = editState.tempDataUrl;
+    } finally {
+        if (DOM.btnApplyEdit) {
+            DOM.btnApplyEdit.disabled = false;
+            DOM.btnApplyEdit.classList.remove('is-processing');
+        }
+    }
 }
 
 // Revert all edits
