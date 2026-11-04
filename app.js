@@ -1037,6 +1037,7 @@ function updateUIState() {
 // Display uploaded files with sorting capabilities and metadata
 function renderUploadedGrid() {
     DOM.imageListContainer.innerHTML = '';
+    const gridFragment = document.createDocumentFragment();
 
     STATE.files.forEach((fileObj, index) => {
         const item = document.createElement('div');
@@ -1052,7 +1053,6 @@ function renderUploadedGrid() {
         const sizeIsCurrent = fileObj.exactPdfSize &&
             fileObj.sizeFingerprint === getFileSizeFingerprint(fileObj);
         const individualSize = sizeIsCurrent ? fileObj.exactPdfSize : 0;
-        const sizeDisplay = individualSize ? formatFileSize(individualSize) : 'wait';
 
         const qualityLabel = fileObj.quality === 100 ? 'Original' : `${fileObj.quality || 90}%`;
 
@@ -1249,8 +1249,9 @@ function renderUploadedGrid() {
             updateUIState();
         });
 
-        DOM.imageListContainer.appendChild(item);
+        gridFragment.appendChild(item);
     });
+    DOM.imageListContainer.appendChild(gridFragment);
 
     // Re-create icons for new dynamic list markup
     if (typeof lucide !== 'undefined') {
@@ -1652,9 +1653,84 @@ function applyWatermark(doc, pageConfig, text) {
 let activeCanvasTasks = 0;
 const canvasTaskWaiters = [];
 const qualityRatioCache = new Map();
+const imageWorkers = [];
+let workerQueueWaiters = [];
+const imageWorkerStats = {
+    poolSize: 0,
+    completed: 0,
+    fallback: 0,
+    lastBatchMs: 0
+};
+window.getImageWorkerStats = () => ({ ...imageWorkerStats });
+
+function getImageWorkerPoolSize() {
+    return Math.max(1, Math.min(16, navigator.hardwareConcurrency || 4));
+}
+
+function getAvailableImageWorker() {
+    if (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined') return null;
+    const activeWorkers = imageWorkers.filter(worker => !worker.failed);
+    if (activeWorkers.length < getImageWorkerPoolSize()) {
+        const worker = new Worker('image-worker.js?v=2');
+        worker.busy = false;
+        worker.failed = false;
+        imageWorkerStats.poolSize++;
+        worker.currentResolve = null;
+        worker.currentReject = null;
+        worker.onmessage = function (event) {
+            if (!worker.currentResolve) return;
+            const resolve = worker.currentResolve;
+            const reject = worker.currentReject;
+            worker.currentResolve = null;
+            worker.currentReject = null;
+            worker.busy = false;
+            const nextWaiter = workerQueueWaiters.shift();
+            if (nextWaiter) nextWaiter();
+
+            if (event.data.error) {
+                reject(new Error(event.data.error));
+            } else {
+                imageWorkerStats.completed++;
+                resolve(event.data);
+            }
+        };
+        worker.onerror = function (error) {
+            const reject = worker.currentReject;
+            worker.currentResolve = null;
+            worker.currentReject = null;
+            worker.busy = false;
+            worker.failed = true;
+            const nextWaiter = workerQueueWaiters.shift();
+            if (nextWaiter) nextWaiter();
+            if (reject) reject(error instanceof Error ? error : new Error('Image worker failed'));
+        };
+        imageWorkers.push(worker);
+        return worker;
+    }
+
+    return imageWorkers.find(worker => !worker.failed && !worker.busy) || null;
+}
+
+async function processImageInWorker(dataUrl, mimeType, quality) {
+    let worker = getAvailableImageWorker();
+    while (!worker) {
+        await new Promise(resolve => workerQueueWaiters.push(resolve));
+        worker = getAvailableImageWorker();
+    }
+
+    worker.busy = true;
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+
+    return new Promise((resolve, reject) => {
+        worker.currentResolve = resolve;
+        worker.currentReject = reject;
+        worker.postMessage({ blob, mimeType, quality });
+    });
+}
 
 async function runCanvasTask(task) {
-    const concurrency = Math.max(4, Math.min(16, navigator.hardwareConcurrency || 4));
+    const concurrency = getImageWorkerPoolSize();
 
     activeCanvasTasks++;
     if (activeCanvasTasks > concurrency) {
@@ -1675,6 +1751,9 @@ async function processQualityRatio(dataUrl, mimeType, quality) {
     if (!qualityCache) {
         qualityCache = new Map();
         qualityRatioCache.set(dataUrl, qualityCache);
+        if (qualityRatioCache.size > 500) {
+            qualityRatioCache.delete(qualityRatioCache.keys().next().value);
+        }
     }
     const cacheKey = `${quality}|${mimeType}`;
     if (qualityCache.has(cacheKey)) {
@@ -1685,7 +1764,25 @@ async function processQualityRatio(dataUrl, mimeType, quality) {
         // No compression for full lossless representations or vector formats
         if (quality === 100 || mimeType === 'image/svg+xml') {
             const format = mimeType.includes('png') ? 'PNG' : 'JPEG';
-            return { url: dataUrl, format: format };
+            const base64Length = (dataUrl.split(',')[1] || '').length;
+            return { url: dataUrl, format, byteSize: Math.round(base64Length * 0.75) };
+        }
+
+        try {
+            const workerResult = await processImageInWorker(dataUrl, mimeType, quality);
+            if (!workerResult.error && workerResult.compressedBlob) {
+                const url = await new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(workerResult.compressedBlob);
+                });
+                return { url, format: 'JPEG', byteSize: workerResult.compressedBlob.size };
+            }
+            if (workerResult.error) imageWorkerStats.fallback++;
+        } catch (workerError) {
+            imageWorkerStats.fallback++;
+            console.warn('Worker image processing failed; using main-thread fallback:', workerError);
         }
 
         if (typeof createImageBitmap === 'function') {
@@ -1705,7 +1802,7 @@ async function processQualityRatio(dataUrl, mimeType, quality) {
                     reader.onerror = reject;
                     reader.readAsDataURL(jpegBlob);
                 });
-                return { url, format: 'JPEG' };
+                return { url, format: 'JPEG', byteSize: jpegBlob.size };
             }
 
             bitmap.close();
@@ -1722,13 +1819,17 @@ async function processQualityRatio(dataUrl, mimeType, quality) {
                 const compressedUrl = canvas.toDataURL('image/jpeg', quality / 100);
                 canvas.width = 0;
                 canvas.height = 0;
-                resolve({ url: compressedUrl, format: 'JPEG' });
+                const dataLength = (compressedUrl.split(',')[1] || '').length;
+                resolve({ url: compressedUrl, format: 'JPEG', byteSize: Math.round(dataLength * 0.75) });
             };
             img.onerror = reject;
             img.src = dataUrl;
         });
     });
     qualityCache.set(cacheKey, processingPromise);
+    if (qualityCache.size > 6) {
+        qualityCache.delete(qualityCache.keys().next().value);
+    }
     return processingPromise;
 }
 
@@ -1848,9 +1949,6 @@ function delay(ms) {
 }
 
 // Recalculate estimated PDF size based on selected quality and files in queue
-let exactSizeTimeout = null;
-let sizeCalculationGeneration = 0;
-let activeSizeCancellationToken = null;
 
 function getFileSizeFingerprint(fileObj) {
     return [
@@ -1870,49 +1968,46 @@ function getFileSizeFingerprint(fileObj) {
     ].join('|');
 }
 
-async function calculateSingleImagePdfSize(fileObj, index) {
+let sizeBadgeUpdateFrame = null;
+let imageEstimateGeneration = 0;
+
+function scheduleSizeBadgeUpdates() {
+    if (sizeBadgeUpdateFrame !== null) return;
+    sizeBadgeUpdateFrame = requestAnimationFrame(() => {
+        sizeBadgeUpdateFrame = null;
+        updateIndividualSizeBadges();
+        updateEstimatedTotalFromIndividualSizes();
+    });
+}
+
+async function processStaleIndexesInBatches(indexes, generation) {
+    const batchSize = getImageWorkerPoolSize();
+    const startedAt = performance.now();
+    for (let start = 0; start < indexes.length; start += batchSize) {
+        if (generation !== imageEstimateGeneration) return;
+        const batch = indexes.slice(start, start + batchSize);
+        await Promise.all(batch.map(index =>
+            calculateSingleImagePdfSize(STATE.files[index], index, generation)
+        ));
+        await new Promise(resolve => requestAnimationFrame(resolve));
+    }
+    imageWorkerStats.lastBatchMs = Math.round(performance.now() - startedAt);
+    console.info(`[Image workers] pool=${getImageWorkerPoolSize()}, images=${indexes.length}, batch=${imageWorkerStats.lastBatchMs}ms`);
+    scheduleSizeBadgeUpdates();
+}
+
+async function calculateSingleImagePdfSize(fileObj, index, generation) {
+    if (generation !== imageEstimateGeneration) return;
     const quality = fileObj.quality || STATE.settings.imageQuality;
     const processedImage = await processQualityRatio(fileObj.dataUrl, fileObj.type, quality);
+    if (generation !== imageEstimateGeneration) return;
     const fingerprint = getFileSizeFingerprint(fileObj);
-    let exactSize;
-
-    if (STATE.settings.mergeMode === 'separate') {
-        const usedPageSize = fileObj.pageSizeOverride && fileObj.pageSizeOverride !== 'global'
-            ? fileObj.pageSizeOverride
-            : STATE.settings.pageSize;
-        const usedMargin = fileObj.marginOverride && fileObj.marginOverride !== 'global'
-            ? fileObj.marginOverride
-            : STATE.settings.margin;
-        const pageConfig = getPageDimensionsAndImageBounds(
-            fileObj.width,
-            fileObj.height,
-            usedPageSize,
-            STATE.settings.orientation,
-            usedMargin,
-            STATE.settings.imageFitting
-        );
-        const itemDoc = new jsPDF({
-            orientation: pageConfig.pageW > pageConfig.pageH ? 'l' : 'p',
-            unit: 'pt',
-            format: [pageConfig.pageW, pageConfig.pageH]
-        });
-        itemDoc.addImage(processedImage.url, processedImage.format,
-            pageConfig.imgX, pageConfig.imgY, pageConfig.imgW, pageConfig.imgH);
-        if (STATE.settings.watermarkText) {
-            applyWatermark(itemDoc, pageConfig, STATE.settings.watermarkText);
-        }
-        exactSize = itemDoc.output('blob').size;
-    } else {
-        const dataLength = processedImage.url.split(',')[1] || '';
-        const imageBytes = Math.round(dataLength.length * 0.75);
-        exactSize = imageBytes + 1500;
-    }
+    const exactSize = (processedImage.byteSize || 0) + 1500;
 
     if (STATE.files[index] === fileObj && getFileSizeFingerprint(fileObj) === fingerprint) {
         fileObj.exactPdfSize = exactSize;
         fileObj.sizeFingerprint = fingerprint;
-        updateIndividualSizeBadges();
-        updateEstimatedTotalFromIndividualSizes();
+        scheduleSizeBadgeUpdates();
     }
 }
 
@@ -1946,8 +2041,6 @@ function recalculateEstimatedPDFSize(targetIndex = null) {
     if (DOM.sizeIndicatorGroup) {
         DOM.sizeIndicatorGroup.style.display = 'flex';
     }
-
-    const globalQuality = STATE.settings.imageQuality;
 
     // Check if we already have the exact size calculated for these precise settings
     const fingerprint = STATE.files.map(f => f.id + '-' + (f.editCount || 0)).join(',');
@@ -1998,83 +2091,15 @@ function recalculateEstimatedPDFSize(targetIndex = null) {
     updateIndividualSizeBadges();
     updateEstimatedTotalFromIndividualSizes();
 
-    // Calculate stale cards independently and in parallel.
-    Promise.all(staleIndexes.map(index => calculateSingleImagePdfSize(STATE.files[index], index)))
-        .then(() => updateEstimatedTotalFromIndividualSizes())
+    // Process large queues in bounded batches to prevent worker/input-buffer pressure.
+    imageEstimateGeneration++;
+    processStaleIndexesInBatches(staleIndexes, imageEstimateGeneration)
         .catch(error => console.warn('Failed to calculate individual image size:', error));
 
     if (targetIndex !== null) {
-        sizeCalculationGeneration++;
-        if (activeSizeCancellationToken) {
-            activeSizeCancellationToken.cancelled = true;
-        }
-        if (exactSizeTimeout) {
-            clearTimeout(exactSizeTimeout);
-            exactSizeTimeout = null;
-        }
         return;
     }
-
-    // 2. Debounced Exact Compiled Size Calculation
-    if (exactSizeTimeout) {
-        clearTimeout(exactSizeTimeout);
-    }
-
-    const watermarkCheck = STATE.settings.watermarkText;
-    const enablePasswordCheck = STATE.settings.enablePassword;
-    const passwordCheck = STATE.settings.pdfPassword;
-    sizeCalculationGeneration++;
-    const cancellationToken = { cancelled: false };
-    activeSizeCancellationToken = cancellationToken;
-    const generation = sizeCalculationGeneration;
-
-    exactSizeTimeout = setTimeout(async () => {
-        try {
-            const result = await compilePDFDocument(undefined, cancellationToken);
-            if (cancellationToken.cancelled || generation !== sizeCalculationGeneration) return;
-
-            if (!result) return;
-
-            const currentFingerprint = STATE.files.map(f => f.id + '-' + (f.editCount || 0)).join(',');
-            const currentQFingerprint = STATE.files.map(f => f.quality || 90).join(',');
-
-            const currentWatermark = STATE.settings.watermarkText;
-            const currentEnablePassword = STATE.settings.enablePassword;
-            const currentPassword = STATE.settings.pdfPassword;
-
-            if (STATE.settings.imageQuality === globalQuality &&
-                currentFingerprint === fingerprint &&
-                currentQFingerprint === qFingerprint &&
-                currentWatermark === watermarkCheck &&
-                currentEnablePassword === enablePasswordCheck &&
-                currentPassword === passwordCheck) {
-
-                if (DOM.estimatedPdfSize) {
-                    const label = STATE.settings.mergeMode === 'separate' ? 'Batch Total' : 'Size';
-                    updateSizeBadge(DOM.estimatedPdfSize, label, result.size);
-                }
-
-                updateIndividualSizeBadges();
-
-                STATE.compiledCache = {
-                    pageSize: STATE.settings.pageSize,
-                    orientation: STATE.settings.orientation,
-                    margin: STATE.settings.margin,
-                    imageFitting: STATE.settings.imageFitting,
-                    mergeMode: STATE.settings.mergeMode,
-                    filesLength: STATE.files.length,
-                    filesFingerprint: fingerprint,
-                    qualitiesFingerprint: qFingerprint,
-                    enablePassword: STATE.settings.enablePassword,
-                    pdfPassword: STATE.settings.pdfPassword,
-                    watermarkText: STATE.settings.watermarkText,
-                    data: result
-                };
-            }
-        } catch (e) {
-            console.warn("Failed to background-compile PDF:", e);
-        }
-    }, 0); // 0ms delay as requested for instant recalculation
+    return;
 }
 
 // Update individual list card badge text content instantly
