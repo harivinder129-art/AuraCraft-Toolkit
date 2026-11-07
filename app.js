@@ -649,7 +649,7 @@ async function processPdfFile(file) {
                 viewport: viewport
             }).promise;
 
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.98);
 
             canvas.width = 0;
             canvas.height = 0;
@@ -836,7 +836,7 @@ async function processFiles(files) {
                 const convertedBlob = await convertFn({
                     blob: file,
                     type: 'image/jpeg',
-                    quality: 0.82
+                    quality: 0.92
                 });
                 const singleBlob = Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob;
                 const newName = file.name.replace(/\.[^/.]+$/, "") + '.jpg';
@@ -1561,8 +1561,9 @@ async function exportSeparatePDFs() {
     }
 }
 
-async function ensureJpegDataUrl(dataUrl, quality = 0.95) {
-    if (dataUrl && dataUrl.startsWith('data:image/jpeg') && quality >= 0.95) {
+// Converts non-JPEG or transparent data URLs to pristine standard JPEG without double recompressing
+async function ensureJpegDataUrl(dataUrl) {
+    if (dataUrl && dataUrl.startsWith('data:image/jpeg')) {
         return dataUrl;
     }
     return new Promise((resolve) => {
@@ -1576,7 +1577,7 @@ async function ensureJpegDataUrl(dataUrl, quality = 0.95) {
             ctx.fillStyle = '#FFFFFF';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(img, 0, 0);
-            const jpegUrl = canvas.toDataURL('image/jpeg', quality);
+            const jpegUrl = canvas.toDataURL('image/jpeg', 0.98);
             canvas.width = 0;
             canvas.height = 0;
             resolve(jpegUrl);
@@ -1601,6 +1602,7 @@ async function saveSeparateImages() {
             updateStickyProgress(true, `Saving image ${i + 1} of ${total}...`);
 
             const quality = fileObj.quality || 100;
+            // Single-pass compression directly from the master original
             const processedImage = await processQualityRatio(
                 fileObj.dataUrl,
                 fileObj.type,
@@ -1608,8 +1610,8 @@ async function saveSeparateImages() {
                 fileObj.currentBytes || fileObj.originalBytes
             );
 
-            // Always enforce pure .jpg (JPEG) format with white background
-            const jpegUrl = await ensureJpegDataUrl(processedImage.url, (quality || 100) / 100);
+            // Output clean JPEG without re-encoding already compressed data
+            const jpegUrl = await ensureJpegDataUrl(processedImage.url);
 
             const cleanName = (fileObj.name || `image_${i + 1}`).replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').trim().replace(/\s+/g, "_") || `image_${i + 1}`;
             const fileName = total > 1 ? `${cleanName}_${i + 1}.jpg` : `${cleanName}_extracted.jpg`;
@@ -1732,7 +1734,7 @@ async function downloadSingleImage(index) {
             fileObj.currentBytes || fileObj.originalBytes
         );
 
-        const jpegUrl = await ensureJpegDataUrl(processedImage.url, (quality || 100) / 100);
+        const jpegUrl = await ensureJpegDataUrl(processedImage.url);
         const cleanName = fileObj.name.replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').replace(/\s+/g, "_");
         const fileName = `${cleanName}_extracted.jpg`;
 
@@ -1973,6 +1975,9 @@ async function processQualityRatio(dataUrl, mimeType, quality, knownByteSize = n
                 const bitmap = await createImageBitmap(blob);
                 const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
                 const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                // Clean white background prevents transparent PNG/WebP pixels from turning black
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(0, 0, bitmap.width, bitmap.height);
                 ctx.drawImage(bitmap, 0, 0);
                 bitmap.close();
                 const jpegBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: quality / 100 });
@@ -1993,6 +1998,8 @@ async function processQualityRatio(dataUrl, mimeType, quality, knownByteSize = n
                 canvas.width = img.width;
                 canvas.height = img.height;
                 const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(0, 0, img.width, img.height);
                 ctx.drawImage(img, 0, 0);
                 const compressedUrl = canvas.toDataURL('image/jpeg', quality / 100);
                 canvas.width = 0;
@@ -2407,7 +2414,7 @@ function updateEditPreview(resetCropBox = false) {
                         }, 50);
                     };
                     DOM.cropSourceImage.src = previewUrl;
-                }, fileObj.type === 'image/png' ? 'image/png' : 'image/jpeg', 0.82);
+                }, fileObj.type === 'image/png' ? 'image/png' : 'image/jpeg', 0.88);
             };
             img.src = fileObj.originalPreviewUrl || fileObj.originalDataUrl;
         }, 50);
@@ -2986,8 +2993,9 @@ async function applyImageEdits() {
         const finalW = finalCanvas.width;
         const finalH = finalCanvas.height;
         const outputType = fileObj.type === 'image/png' ? 'image/png' : 'image/jpeg';
+        // Use 0.98 near-lossless master quality so edits do not accumulate generational degradation
         const outputBlob = await new Promise(resolve => {
-            finalCanvas.toBlob(resolve, outputType, outputType === 'image/jpeg' ? 0.95 : undefined);
+            finalCanvas.toBlob(resolve, outputType, outputType === 'image/jpeg' ? 0.98 : undefined);
         });
         if (!outputBlob) throw new Error('Could not encode edited image');
 
