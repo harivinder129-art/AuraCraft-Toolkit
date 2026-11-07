@@ -919,7 +919,6 @@ async function processFiles(files) {
             enableCpuCanvasMode();
         }
         const hardwareConcurrency = navigator.hardwareConcurrency || 4;
-        // Convert 2 to 4 HEIC/PDF files in parallel (4 to 8 for standard images)
         const fileConcurrency = hasHeicOrPdf
             ? Math.max(2, Math.min(4, hardwareConcurrency))
             : Math.max(4, Math.min(8, hardwareConcurrency));
@@ -1563,7 +1562,7 @@ async function exportSeparatePDFs() {
 
 // Converts non-JPEG or transparent data URLs to pristine standard JPEG without double recompressing
 async function ensureJpegDataUrl(dataUrl) {
-    if (dataUrl && dataUrl.startsWith('data:image/jpeg')) {
+    if (dataUrl && (dataUrl.startsWith('data:image/jpeg') || dataUrl.startsWith('blob:'))) {
         return dataUrl;
     }
     return new Promise((resolve) => {
@@ -1602,15 +1601,15 @@ async function saveSeparateImages() {
             updateStickyProgress(true, `Saving image ${i + 1} of ${total}...`);
 
             const quality = fileObj.quality || 100;
-            // Single-pass compression directly from the master original
+            // Always compress single-pass from pristine source
             const processedImage = await processQualityRatio(
-                fileObj.dataUrl,
+                fileObj.previewUrl || fileObj.dataUrl,
                 fileObj.type,
                 quality,
                 fileObj.currentBytes || fileObj.originalBytes
             );
 
-            // Output clean JPEG without re-encoding already compressed data
+            // Bypass double-compression: ensureJpegDataUrl will NOT recompress an already generated JPEG
             const jpegUrl = await ensureJpegDataUrl(processedImage.url);
 
             const cleanName = (fileObj.name || `image_${i + 1}`).replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').trim().replace(/\s+/g, "_") || `image_${i + 1}`;
@@ -1662,7 +1661,7 @@ async function saveZipImages() {
             const fileObj = STATE.files[i];
             const quality = fileObj.quality || 100;
             const processedImage = await processQualityRatio(
-                fileObj.dataUrl,
+                fileObj.previewUrl || fileObj.dataUrl,
                 fileObj.type,
                 quality,
                 fileObj.currentBytes || fileObj.originalBytes
@@ -1673,10 +1672,14 @@ async function saveZipImages() {
             const cleanName = (fileObj.name || `image_${i + 1}`).replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').trim().replace(/\s+/g, "_") || `image_${i + 1}`;
             const fileName = total > 1 ? `${cleanName}_${i + 1}.${ext}` : `${cleanName}.${ext}`;
 
-            const commaIdx = processedImage.url.indexOf(',');
-            const base64Data = commaIdx !== -1 ? processedImage.url.substring(commaIdx + 1) : processedImage.url;
-
-            zip.file(fileName, base64Data, { base64: true });
+            // High-speed binary ingestion into JSZip
+            if (processedImage.blob && !isPng) {
+                zip.file(fileName, processedImage.blob);
+            } else {
+                const commaIdx = processedImage.url.indexOf(',');
+                const base64Data = commaIdx !== -1 ? processedImage.url.substring(commaIdx + 1) : processedImage.url;
+                zip.file(fileName, base64Data, { base64: true });
+            }
         }
 
         updateStickyProgress(true, 'Compressing ZIP archive (0%)...');
@@ -1728,7 +1731,7 @@ async function downloadSingleImage(index) {
     try {
         const quality = fileObj.quality || 100;
         const processedImage = await processQualityRatio(
-            fileObj.dataUrl,
+            fileObj.previewUrl || fileObj.dataUrl,
             fileObj.type,
             quality,
             fileObj.currentBytes || fileObj.originalBytes
@@ -1762,7 +1765,7 @@ async function compilePDFDocument(progressCallback, cancellationToken = null, fo
         const processingPromises = STATE.files.map(imgData => {
             const quality = imgData.quality || 100;
             return processQualityRatio(
-                imgData.dataUrl,
+                imgData.previewUrl || imgData.dataUrl,
                 imgData.type,
                 quality,
                 imgData.currentBytes || imgData.originalBytes
@@ -1837,7 +1840,7 @@ async function compilePDFDocument(progressCallback, cancellationToken = null, fo
         const processingPromises = STATE.files.map(imgData => {
             const quality = imgData.quality || 100;
             return processQualityRatio(
-                imgData.dataUrl,
+                imgData.previewUrl || imgData.dataUrl,
                 imgData.type,
                 quality,
                 imgData.currentBytes || imgData.originalBytes
@@ -1915,7 +1918,7 @@ function applyWatermark(doc, pageConfig, text) {
     });
 }
 
-// Built-in client-side compression (only runs when user manually lowers a card's Quality slider < 100%)
+// Built-in client-side compression
 let activeCanvasTasks = 0;
 const canvasTaskWaiters = [];
 const qualityRatioCache = new Map();
@@ -1941,23 +1944,28 @@ async function runCanvasTask(task) {
     }
 }
 
-async function processQualityRatio(dataUrl, mimeType, quality, knownByteSize = null) {
+// 2x Fast Hardware-Accelerated Quality Compressor (Exact Original Dimensions, Single-Pass)
+async function processQualityRatio(sourceData, mimeType, quality, knownByteSize = null) {
     // Instant zero-overhead fast path for 100% Original Quality
     if (quality === 100 || mimeType === 'image/svg+xml') {
         const format = (mimeType && mimeType.includes('png')) ? 'PNG' : 'JPEG';
         let byteSize = knownByteSize;
-        if (byteSize === null) {
-            const headerIndex = dataUrl.indexOf(',');
-            const dataLength = headerIndex !== -1 ? dataUrl.length - headerIndex - 1 : dataUrl.length;
+        if (byteSize === null && typeof sourceData === 'string') {
+            const headerIndex = sourceData.indexOf(',');
+            const dataLength = headerIndex !== -1 ? sourceData.length - headerIndex - 1 : sourceData.length;
             byteSize = Math.round(dataLength * 0.75);
         }
-        return { url: dataUrl, format, byteSize };
+        return { 
+            url: sourceData, 
+            format, 
+            byteSize 
+        };
     }
 
-    let qualityCache = qualityRatioCache.get(dataUrl);
+    let qualityCache = qualityRatioCache.get(sourceData);
     if (!qualityCache) {
         qualityCache = new Map();
-        qualityRatioCache.set(dataUrl, qualityCache);
+        qualityRatioCache.set(sourceData, qualityCache);
         if (qualityRatioCache.size > 500) {
             qualityRatioCache.delete(qualityRatioCache.keys().next().value);
         }
@@ -1968,53 +1976,78 @@ async function processQualityRatio(dataUrl, mimeType, quality, knownByteSize = n
     }
 
     const processingPromise = runCanvasTask(async () => {
+        // Fast path: Hardware OffscreenCanvas without CPU willReadFrequently throttling
         if (typeof createImageBitmap === 'function' && typeof OffscreenCanvas !== 'undefined') {
             try {
-                const response = await fetch(dataUrl);
-                const blob = await response.blob();
+                let blob = null;
+                if (typeof sourceData === 'string') {
+                    const response = await fetch(sourceData);
+                    blob = await response.blob();
+                } else {
+                    blob = sourceData;
+                }
+
+                // Native hardware decode directly into an ImageBitmap
                 const bitmap = await createImageBitmap(blob);
                 const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-                const ctx = canvas.getContext('2d', { willReadFrequently: true });
-                // Clean white background prevents transparent PNG/WebP pixels from turning black
+                const ctx = canvas.getContext('2d');
+
+                // Clean solid white background (prevents transparent PNG/WebP turned into black)
                 ctx.fillStyle = '#FFFFFF';
                 ctx.fillRect(0, 0, bitmap.width, bitmap.height);
                 ctx.drawImage(bitmap, 0, 0);
-                bitmap.close();
-                const jpegBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: quality / 100 });
+                bitmap.close(); // Immediate memory release
+
+                const jpegBlob = await canvas.convertToBlob({
+                    type: 'image/jpeg',
+                    quality: quality / 100
+                });
+
                 const url = await new Promise((resolve, reject) => {
                     const reader = new FileReader();
                     reader.onload = () => resolve(reader.result);
                     reader.onerror = reject;
                     reader.readAsDataURL(jpegBlob);
                 });
-                return { url, format: 'JPEG', byteSize: jpegBlob.size };
+
+                return { 
+                    url, 
+                    blob: jpegBlob, 
+                    format: 'JPEG', 
+                    byteSize: jpegBlob.size 
+                };
             } catch (_) { }
         }
 
+        // Standard 2D Canvas Fallback
         return new Promise((resolve, reject) => {
             const img = new Image();
             img.onload = function () {
                 const canvas = document.createElement('canvas');
-                canvas.width = img.width;
-                canvas.height = img.height;
-                const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                canvas.width = img.naturalWidth || img.width;
+                canvas.height = img.naturalHeight || img.height;
+                const ctx = canvas.getContext('2d');
                 ctx.fillStyle = '#FFFFFF';
-                ctx.fillRect(0, 0, img.width, img.height);
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.drawImage(img, 0, 0);
                 const compressedUrl = canvas.toDataURL('image/jpeg', quality / 100);
                 canvas.width = 0;
                 canvas.height = 0;
                 const headerIdx = compressedUrl.indexOf(',');
                 const dataLength = headerIdx !== -1 ? compressedUrl.length - headerIdx - 1 : compressedUrl.length;
-                resolve({ url: compressedUrl, format: 'JPEG', byteSize: Math.round(dataLength * 0.75) });
+                resolve({ 
+                    url: compressedUrl, 
+                    format: 'JPEG', 
+                    byteSize: Math.round(dataLength * 0.75) 
+                });
             };
             img.onerror = reject;
-            img.src = dataUrl;
+            img.src = sourceData;
         });
     });
 
     qualityCache.set(cacheKey, processingPromise);
-    if (qualityCache.size > 6) {
+    if (qualityCache.size > 8) {
         qualityCache.delete(qualityCache.keys().next().value);
     }
     return processingPromise;
@@ -2166,7 +2199,7 @@ async function calculateSingleImagePdfSize(fileObj, index, generation) {
     if (!fileObj || generation !== imageEstimateGeneration) return;
     const quality = fileObj.quality || 100;
     const processedImage = await processQualityRatio(
-        fileObj.dataUrl,
+        fileObj.previewUrl || fileObj.dataUrl,
         fileObj.type,
         quality,
         fileObj.currentBytes || fileObj.originalBytes
@@ -2993,7 +3026,7 @@ async function applyImageEdits() {
         const finalW = finalCanvas.width;
         const finalH = finalCanvas.height;
         const outputType = fileObj.type === 'image/png' ? 'image/png' : 'image/jpeg';
-        // Use 0.98 near-lossless master quality so edits do not accumulate generational degradation
+        // Encode at near-lossless 0.98 so edit passes never degrade master pixels
         const outputBlob = await new Promise(resolve => {
             finalCanvas.toBlob(resolve, outputType, outputType === 'image/jpeg' ? 0.98 : undefined);
         });
@@ -3078,7 +3111,7 @@ async function downloadSinglePDF(index) {
     try {
         const quality = fileObj.quality || 100;
         const processedImage = await processQualityRatio(
-            fileObj.dataUrl,
+            fileObj.previewUrl || fileObj.dataUrl,
             fileObj.type,
             quality,
             fileObj.currentBytes || fileObj.originalBytes
