@@ -62,6 +62,21 @@ const DOM = {
     pdfPassword: document.getElementById('pdfPassword'),
     watermarkText: document.getElementById('watermarkText'),
 
+    // Bottom Sticky Action Bar Elements
+    bottomStickyBar: document.getElementById('bottomStickyBar'),
+    stickyFileCount: document.getElementById('stickyFileCount'),
+    stickyStatusBadge: document.getElementById('stickyStatusBadge'),
+    stickyProgressContainer: document.getElementById('stickyProgressContainer'),
+    stickyProgressText: document.getElementById('stickyProgressText'),
+    stickyPdfDropdown: document.getElementById('stickyPdfDropdown'),
+    btnStickyExportPdf: document.getElementById('btnStickyExportPdf'),
+    btnStickySeparatePdf: document.getElementById('btnStickySeparatePdf'),
+    btnStickySinglePdf: document.getElementById('btnStickySinglePdf'),
+    stickyImgDropdown: document.getElementById('stickyImgDropdown'),
+    btnStickySaveImages: document.getElementById('btnStickySaveImages'),
+    btnStickySeparateImages: document.getElementById('btnStickySeparateImages'),
+    btnStickyZipImages: document.getElementById('btnStickyZipImages'),
+
     // Edit Modal Elements
     editModal: document.getElementById('editModal'),
     closeEditModal: document.getElementById('closeEditModal'),
@@ -334,6 +349,65 @@ function initEventListeners() {
     DOM.nextPreview.addEventListener('click', () => navigatePreview(1));
 
     DOM.btnConvert.addEventListener('click', convertImagesToPDF);
+
+    // Bottom Sticky Action Bar Events
+    if (DOM.btnStickyExportPdf) {
+        DOM.btnStickyExportPdf.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (STATE.files.length === 0 || STATE.compiling) return;
+            toggleStickyDropdown(DOM.stickyPdfDropdown);
+        });
+    }
+
+    if (DOM.btnStickySaveImages) {
+        DOM.btnStickySaveImages.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (STATE.files.length === 0 || STATE.compiling) return;
+            toggleStickyDropdown(DOM.stickyImgDropdown);
+        });
+    }
+
+    if (DOM.btnStickySeparatePdf) {
+        DOM.btnStickySeparatePdf.addEventListener('click', (e) => {
+            e.stopPropagation();
+            exportSeparatePDFs();
+        });
+    }
+
+    if (DOM.btnStickySinglePdf) {
+        DOM.btnStickySinglePdf.addEventListener('click', (e) => {
+            e.stopPropagation();
+            exportSinglePDF();
+        });
+    }
+
+    if (DOM.btnStickySeparateImages) {
+        DOM.btnStickySeparateImages.addEventListener('click', (e) => {
+            e.stopPropagation();
+            saveSeparateImages();
+        });
+    }
+
+    if (DOM.btnStickyZipImages) {
+        DOM.btnStickyZipImages.addEventListener('click', (e) => {
+            e.stopPropagation();
+            saveZipImages();
+        });
+    }
+
+    // Dismiss sticky dropdowns when clicking outside
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('.sticky-dropdown-wrapper')) {
+            closeAllStickyDropdowns();
+        }
+    });
+
+    // Dismiss sticky dropdowns on Escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            closeAllStickyDropdowns();
+        }
+    });
 }
 
 function setupTabSelectors() {
@@ -721,7 +795,7 @@ async function processFiles(files) {
                         offset += 2 + segLength;
                     }
                 }
-            } catch (_) {}
+            } catch (_) { }
         }
 
         return new Promise((resolve) => {
@@ -772,7 +846,7 @@ async function processFiles(files) {
                 console.error('HEIC conversion failed for:', file.name, heicErr);
                 alert(`HEIC Transcoding Failed for "${file.name}": ${heicErr.message || heicErr}`);
                 throw heicErr;
-            } 
+            }
         }
 
         if (!resolvedType || resolvedType === 'application/octet-stream') {
@@ -963,6 +1037,12 @@ function updateUIState() {
         DOM.imageListCard.style.display = 'none';
         DOM.btnConvert.disabled = true;
 
+        if (DOM.btnStickyExportPdf) DOM.btnStickyExportPdf.disabled = true;
+        if (DOM.btnStickySaveImages) DOM.btnStickySaveImages.disabled = true;
+        if (DOM.stickyFileCount) DOM.stickyFileCount.textContent = '0 items';
+        if (DOM.bottomStickyBar) DOM.bottomStickyBar.classList.add('is-empty');
+        closeAllStickyDropdowns();
+
         DOM.previewPlaceholder.style.display = 'flex';
         const existingSheet = DOM.virtualPreviewCanvas.querySelector('.virtual-pdf-sheet');
         if (existingSheet) existingSheet.remove();
@@ -974,8 +1054,15 @@ function updateUIState() {
         }
     } else {
         DOM.imageListCard.style.display = 'flex';
-        DOM.btnConvert.disabled = false;
+        DOM.btnConvert.disabled = STATE.compiling;
         DOM.previewPlaceholder.style.display = 'none';
+
+        if (!STATE.compiling) {
+            if (DOM.btnStickyExportPdf) DOM.btnStickyExportPdf.disabled = false;
+            if (DOM.btnStickySaveImages) DOM.btnStickySaveImages.disabled = false;
+        }
+        if (DOM.stickyFileCount) DOM.stickyFileCount.textContent = `${fileCount} item${fileCount > 1 ? 's' : ''}`;
+        if (DOM.bottomStickyBar) DOM.bottomStickyBar.classList.remove('is-empty');
 
         if (STATE.activePageIdx >= fileCount) {
             STATE.activePageIdx = fileCount - 1;
@@ -1322,21 +1409,68 @@ function navigatePreview(dir) {
 }
 
 /* ==========================================================================
-   jsPDF Compilation Processing
+   Sticky Bottom Bar & Export Actions (PDFs & Images)
    ========================================================================== */
-async function convertImagesToPDF() {
+function toggleStickyDropdown(dropdownEl) {
+    if (!dropdownEl) return;
+    const wasOpen = dropdownEl.classList.contains('is-open');
+    closeAllStickyDropdowns();
+    if (!wasOpen) {
+        dropdownEl.classList.add('is-open');
+        const trigger = dropdownEl.querySelector('.sticky-action-btn');
+        if (trigger) trigger.setAttribute('aria-expanded', 'true');
+    }
+}
+
+function closeAllStickyDropdowns() {
+    document.querySelectorAll('.sticky-dropdown-wrapper').forEach(wrapper => {
+        wrapper.classList.remove('is-open');
+        const trigger = wrapper.querySelector('.sticky-action-btn');
+        if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    });
+}
+
+function updateStickyProgress(show, text = '') {
+    if (DOM.stickyProgressContainer) {
+        DOM.stickyProgressContainer.style.display = show ? 'inline-flex' : 'none';
+    }
+    if (DOM.stickyProgressText && text) {
+        DOM.stickyProgressText.textContent = text;
+    }
+    if (DOM.stickyStatusBadge) {
+        DOM.stickyStatusBadge.style.display = show ? 'none' : 'inline-flex';
+    }
+
+    if (DOM.btnConvert) {
+        const btnTextEl = DOM.btnConvert.querySelector('.btn-text');
+        const btnLoadEl = DOM.btnConvert.querySelector('.btn-loading');
+        const progressEl = document.getElementById('compilationProgress');
+        if (show) {
+            DOM.btnConvert.disabled = true;
+            if (btnTextEl) btnTextEl.style.display = 'none';
+            if (btnLoadEl) btnLoadEl.style.display = 'inline-flex';
+            if (progressEl) progressEl.textContent = text;
+        } else {
+            DOM.btnConvert.disabled = STATE.files.length === 0;
+            if (btnTextEl) btnTextEl.style.display = 'inline-flex';
+            if (btnLoadEl) btnLoadEl.style.display = 'none';
+        }
+    }
+}
+
+function setStickyActionsDisabled(disabled) {
+    if (DOM.btnStickyExportPdf) DOM.btnStickyExportPdf.disabled = disabled;
+    if (DOM.btnStickySaveImages) DOM.btnStickySaveImages.disabled = disabled;
+    if (DOM.btnConvert) DOM.btnConvert.disabled = disabled || STATE.files.length === 0;
+}
+
+// 1st: Export PDF -> Single PDF (Multi-page)
+async function exportSinglePDF() {
     if (STATE.files.length === 0 || STATE.compiling) return;
-
+    closeAllStickyDropdowns();
     STATE.compiling = true;
-    DOM.btnConvert.disabled = true;
-
-    const btnTextEl = DOM.btnConvert.querySelector('.btn-text');
-    const btnLoadEl = DOM.btnConvert.querySelector('.btn-loading');
-    const progressEl = document.getElementById('compilationProgress');
-
-    btnTextEl.style.display = 'none';
-    btnLoadEl.style.display = 'inline-flex';
-    progressEl.textContent = '0%';
+    setStickyActionsDisabled(true);
+    updateStickyProgress(true, 'Compiling Single PDF (0%)...');
 
     try {
         const fingerprint = STATE.files.map(f => f.id).join(',');
@@ -1348,7 +1482,7 @@ async function convertImagesToPDF() {
             STATE.compiledCache.orientation === STATE.settings.orientation &&
             STATE.compiledCache.margin === STATE.settings.margin &&
             STATE.compiledCache.imageFitting === STATE.settings.imageFitting &&
-            STATE.compiledCache.mergeMode === STATE.settings.mergeMode &&
+            STATE.compiledCache.mergeMode === 'single' &&
             STATE.compiledCache.filesLength === STATE.files.length &&
             STATE.compiledCache.filesFingerprint === fingerprint &&
             STATE.compiledCache.qualitiesFingerprint === qFingerprint &&
@@ -1359,36 +1493,226 @@ async function convertImagesToPDF() {
 
         if (compiledCacheMatches) {
             compiledResult = STATE.compiledCache.data;
-            progressEl.textContent = '100%';
+            updateStickyProgress(true, 'Saving Single PDF...');
         } else {
             compiledResult = await compilePDFDocument(async (curr, tot) => {
                 const percent = Math.round((curr / tot) * 100);
-                progressEl.textContent = `${percent}%`;
+                updateStickyProgress(true, `Compiling Single PDF (${percent}%)...`);
                 if (curr % 4 === 0 || curr === tot) {
                     await new Promise(resolve => requestAnimationFrame(resolve));
                 }
-            });
+            }, null, 'single');
         }
 
-        if (STATE.settings.mergeMode === 'single') {
+        if (compiledResult && compiledResult.doc) {
             compiledResult.doc.save('pictopdf_compiled.pdf');
-        } else {
-            for (let i = 0; i < compiledResult.docs.length; i++) {
-                const imgData = STATE.files[i];
-                const safeName = imgData.name.replace(/\.[^/.]+$/, "");
-                compiledResult.docs[i].save(`${safeName}_converted.pdf`);
-                await delay(300);
-            }
+            showToast('Single PDF exported successfully!');
         }
-
     } catch (err) {
-        console.error('PDF Export Failed:', err);
-        alert('An error occurred while compiling your PDF. Check details in your browser console.');
+        console.error('Export Single PDF failed:', err);
+        alert('An error occurred while compiling your Single PDF.');
     } finally {
         STATE.compiling = false;
-        DOM.btnConvert.disabled = false;
-        btnTextEl.style.display = 'inline-flex';
-        btnLoadEl.style.display = 'none';
+        updateStickyProgress(false);
+        setStickyActionsDisabled(false);
+        updateUIState();
+    }
+}
+
+// 1st: Export PDF -> Separate PDFs (Batch individual PDFs)
+async function exportSeparatePDFs() {
+    if (STATE.files.length === 0 || STATE.compiling) return;
+    closeAllStickyDropdowns();
+    STATE.compiling = true;
+    setStickyActionsDisabled(true);
+    updateStickyProgress(true, 'Compiling PDFs (0%)...');
+
+    try {
+        const compiledResult = await compilePDFDocument(async (curr, tot) => {
+            const percent = Math.round((curr / tot) * 100);
+            updateStickyProgress(true, `Compiling PDFs (${percent}%)...`);
+            if (curr % 4 === 0 || curr === tot) {
+                await new Promise(resolve => requestAnimationFrame(resolve));
+            }
+        }, null, 'separate');
+
+        if (compiledResult && compiledResult.docs) {
+            const total = compiledResult.docs.length;
+            for (let i = 0; i < total; i++) {
+                const imgData = STATE.files[i];
+                const cleanName = (imgData.name || `page_${i + 1}`).replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').trim().replace(/\s+/g, "_") || `page_${i + 1}`;
+                const fileName = total > 1 ? `${cleanName}_page_${i + 1}.pdf` : `${cleanName}_converted.pdf`;
+                updateStickyProgress(true, `Saving PDF ${i + 1} of ${total}...`);
+                compiledResult.docs[i].save(fileName);
+                if (i < total - 1) {
+                    await delay(350);
+                }
+            }
+            showToast(`Exported ${total} separate PDF${total > 1 ? 's' : ''}!`);
+        }
+    } catch (err) {
+        console.error('Export Separate PDFs failed:', err);
+        alert('An error occurred while compiling separate PDFs.');
+    } finally {
+        STATE.compiling = false;
+        updateStickyProgress(false);
+        setStickyActionsDisabled(false);
+        updateUIState();
+    }
+}
+
+async function ensureJpegDataUrl(dataUrl, quality = 0.95) {
+    if (dataUrl && dataUrl.startsWith('data:image/jpeg') && quality >= 0.95) {
+        return dataUrl;
+    }
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth || img.width;
+            canvas.height = img.naturalHeight || img.height;
+            const ctx = canvas.getContext('2d');
+            // White solid background prevents transparent areas becoming black in JPEG
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, 0, 0);
+            const jpegUrl = canvas.toDataURL('image/jpeg', quality);
+            canvas.width = 0;
+            canvas.height = 0;
+            resolve(jpegUrl);
+        };
+        img.onerror = () => resolve(dataUrl);
+        img.src = dataUrl;
+    });
+}
+
+// 2nd: Save Images -> Separate Images (Batch individual image files, strictly .jpg only)
+async function saveSeparateImages() {
+    if (STATE.files.length === 0 || STATE.compiling) return;
+    closeAllStickyDropdowns();
+    STATE.compiling = true;
+    setStickyActionsDisabled(true);
+    updateStickyProgress(true, 'Preparing JPG images...');
+
+    try {
+        const total = STATE.files.length;
+        for (let i = 0; i < total; i++) {
+            const fileObj = STATE.files[i];
+            updateStickyProgress(true, `Saving image ${i + 1} of ${total}...`);
+
+            const quality = fileObj.quality || 100;
+            const processedImage = await processQualityRatio(
+                fileObj.dataUrl,
+                fileObj.type,
+                quality,
+                fileObj.currentBytes || fileObj.originalBytes
+            );
+
+            // Always enforce pure .jpg (JPEG) format with white background
+            const jpegUrl = await ensureJpegDataUrl(processedImage.url, (quality || 100) / 100);
+
+            const cleanName = (fileObj.name || `image_${i + 1}`).replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').trim().replace(/\s+/g, "_") || `image_${i + 1}`;
+            const fileName = total > 1 ? `${cleanName}_${i + 1}.jpg` : `${cleanName}_extracted.jpg`;
+
+            const link = document.createElement('a');
+            link.href = jpegUrl;
+            link.download = fileName;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            if (i < total - 1) {
+                await delay(350);
+            }
+        }
+        showToast(`Saved ${total} separate JPG image${total > 1 ? 's' : ''}!`);
+    } catch (err) {
+        console.error('Save Separate Images failed:', err);
+        alert('An error occurred while saving JPG images.');
+    } finally {
+        STATE.compiling = false;
+        updateStickyProgress(false);
+        setStickyActionsDisabled(false);
+        updateUIState();
+    }
+}
+
+// 2nd: Save Images -> Zip Images (All images packaged into .zip)
+async function saveZipImages() {
+    if (STATE.files.length === 0 || STATE.compiling) return;
+    closeAllStickyDropdowns();
+
+    if (typeof JSZip === 'undefined') {
+        alert('JSZip library is not loaded. Please refresh the page and try again.');
+        return;
+    }
+
+    STATE.compiling = true;
+    setStickyActionsDisabled(true);
+    updateStickyProgress(true, 'Preparing images for ZIP...');
+
+    try {
+        const zip = new JSZip();
+        const total = STATE.files.length;
+
+        for (let i = 0; i < total; i++) {
+            updateStickyProgress(true, `Processing image ${i + 1} of ${total}...`);
+            const fileObj = STATE.files[i];
+            const quality = fileObj.quality || 100;
+            const processedImage = await processQualityRatio(
+                fileObj.dataUrl,
+                fileObj.type,
+                quality,
+                fileObj.currentBytes || fileObj.originalBytes
+            );
+
+            const isPng = processedImage.format === 'PNG' || (fileObj.type && fileObj.type.includes('png'));
+            const ext = isPng ? 'png' : 'jpg';
+            const cleanName = (fileObj.name || `image_${i + 1}`).replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').trim().replace(/\s+/g, "_") || `image_${i + 1}`;
+            const fileName = total > 1 ? `${cleanName}_${i + 1}.${ext}` : `${cleanName}.${ext}`;
+
+            const commaIdx = processedImage.url.indexOf(',');
+            const base64Data = commaIdx !== -1 ? processedImage.url.substring(commaIdx + 1) : processedImage.url;
+
+            zip.file(fileName, base64Data, { base64: true });
+        }
+
+        updateStickyProgress(true, 'Compressing ZIP archive (0%)...');
+        const zipBlob = await zip.generateAsync(
+            { type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } },
+            (meta) => {
+                if (meta.percent) {
+                    updateStickyProgress(true, `Compressing ZIP (${Math.round(meta.percent)}%)...`);
+                }
+            }
+        );
+
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(zipBlob);
+        link.download = 'pictopdf_images.zip';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        setTimeout(() => URL.revokeObjectURL(link.href), 15000);
+
+        showToast(`Saved all ${total} images in pictopdf_images.zip!`);
+    } catch (err) {
+        console.error('Save Zip Images failed:', err);
+        alert('An error occurred while creating the ZIP archive.');
+    } finally {
+        STATE.compiling = false;
+        updateStickyProgress(false);
+        setStickyActionsDisabled(false);
+        updateUIState();
+    }
+}
+
+async function convertImagesToPDF() {
+    if (STATE.files.length === 0 || STATE.compiling) return;
+    if (STATE.settings.mergeMode === 'single') {
+        await exportSinglePDF();
+    } else {
+        await exportSeparatePDFs();
     }
 }
 
@@ -1408,11 +1732,12 @@ async function downloadSingleImage(index) {
             fileObj.currentBytes || fileObj.originalBytes
         );
 
+        const jpegUrl = await ensureJpegDataUrl(processedImage.url, (quality || 100) / 100);
         const cleanName = fileObj.name.replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').replace(/\s+/g, "_");
         const fileName = `${cleanName}_extracted.jpg`;
 
         const link = document.createElement('a');
-        link.href = processedImage.url;
+        link.href = jpegUrl;
         link.download = fileName;
         document.body.appendChild(link);
         link.click();
@@ -1423,11 +1748,13 @@ async function downloadSingleImage(index) {
     }
 }
 
-async function compilePDFDocument(progressCallback, cancellationToken = null) {
+async function compilePDFDocument(progressCallback, cancellationToken = null, forceMode = null) {
     const count = STATE.files.length;
     if (count === 0) return null;
 
-    if (STATE.settings.mergeMode === 'single') {
+    const mode = forceMode || STATE.settings.mergeMode;
+
+    if (mode === 'single') {
         let doc = null;
 
         const processingPromises = STATE.files.map(imgData => {
@@ -1656,7 +1983,7 @@ async function processQualityRatio(dataUrl, mimeType, quality, knownByteSize = n
                     reader.readAsDataURL(jpegBlob);
                 });
                 return { url, format: 'JPEG', byteSize: jpegBlob.size };
-            } catch (_) {}
+            } catch (_) { }
         }
 
         return new Promise((resolve, reject) => {
@@ -1855,15 +2182,14 @@ function updateEstimatedTotalFromIndividualSizes() {
 
     if (!allCalculated) {
         if (DOM.estimatedPdfSize) {
-            updateSizeBadge(DOM.estimatedPdfSize, STATE.settings.mergeMode === 'separate' ? 'Batch Total' : 'Size', 'wait');
+            updateSizeBadge(DOM.estimatedPdfSize, 'Total Estimate Size', 'wait');
         }
         return;
     }
 
     const totalSize = STATE.files.reduce((sum, fileObj) => sum + fileObj.exactPdfSize, 0);
     if (DOM.estimatedPdfSize) {
-        const label = STATE.settings.mergeMode === 'separate' ? 'Batch Total' : 'Size';
-        updateSizeBadge(DOM.estimatedPdfSize, label, totalSize);
+        updateSizeBadge(DOM.estimatedPdfSize, 'Total Estimate Size', totalSize);
     }
 }
 
@@ -1876,7 +2202,7 @@ function recalculateEstimatedPDFSize(targetIndex = null) {
     }
 
     if (DOM.sizeIndicatorGroup) {
-        DOM.sizeIndicatorGroup.style.display = 'flex';
+        DOM.sizeIndicatorGroup.style.display = 'inline-flex';
     }
 
     const staleIndexes = [];

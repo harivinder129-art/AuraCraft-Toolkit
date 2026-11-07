@@ -18,8 +18,10 @@
     <script src="jspdf.umd.min.js"></script>
     <!-- PDF.js library (Local/Offline) -->
     <script src="pdf.min.js"></script>
+    <!-- JSZip library (Local/Offline) -->
+    <script src="jszip.min.js"></script>
     <!-- Stylesheets -->
-    <link rel="stylesheet" href="styles.css?v=37">
+    <link rel="stylesheet" href="styles.css?v=39">
 
 </head>
 
@@ -98,9 +100,19 @@
                             <i data-lucide="layers" class="title-icon"></i>
                             <h2>Uploaded Items (<span id="fileCount">0</span>)</h2>
                         </div>
-                        <button class="btn-clear-all" id="btnClearAll" title="Clear all files">
-                            <i data-lucide="trash-2"></i> Clear All
-                        </button>
+                        <div class="header-actions-group">
+                            <div class="total-estimate-size-container" id="sizeIndicatorGroup" style="display: none;">
+                                <i data-lucide="hard-drive" class="total-size-icon"></i>
+                                <span class="badge size-value-badge" id="estimatedPdfSize">
+                                    <span class="size-label">Total Estimate Size:</span>
+                                    <span class="size-number">0</span>
+                                    <span class="size-unit">KB</span>
+                                </span>
+                            </div>
+                            <button class="btn-clear-all" id="btnClearAll" title="Clear all files">
+                                <i data-lucide="trash-2"></i> Clear All
+                            </button>
+                        </div>
                     </div>
 
                     <div class="image-list-container" id="imageListContainer">
@@ -186,22 +198,6 @@
                             </div>
                         </div>
 
-                        <!-- Dynamic Size Indicator -->
-                        <div class="setting-group" id="sizeIndicatorGroup" style="display: none;">
-                            <div class="setting-label-between">
-                                <span class="setting-label">
-                                    <i data-lucide="hard-drive" class="title-icon"
-                                        style="width: 14px; height: 14px; margin-right: 2px;"></i>
-                                    Estimated PDF Size
-                                </span>
-                                <span class="badge size-value-badge" id="estimatedPdfSize">
-                                    <span class="size-label">Size:</span>
-                                    <span class="size-number">0</span>
-                                    <span class="size-unit">KB</span>
-                                </span>
-                            </div>
-                        </div>
-
                         <!-- Watermark / Stamping -->
                         <div class="setting-group border-top pt-4">
                             <label class="setting-label">
@@ -212,23 +208,6 @@
                             <input type="text" id="watermarkText" class="custom-input" placeholder="e.g. CONFIDENTIAL">
                             <p class="sub-text mt-2" style="font-size: 0.75rem;">Text will be stamped diagonally across
                                 every page.</p>
-                        </div>
-
-                        <!-- PDF Compilation Output Strategy -->
-                        <div class="setting-group border-top pt-4">
-                            <div class="setting-label-between">
-                                <label class="setting-label">Merge Mode</label>
-                            </div>
-                            <div class="switch-selector">
-                                <div class="switch-option active" data-value="single">
-                                    <i data-lucide="book-open"></i>
-                                    <span>Single PDF (Multi-page)</span>
-                                </div>
-                                <div class="switch-option" data-value="separate">
-                                    <i data-lucide="copy"></i>
-                                    <span>Separate PDFs (Batch)</span>
-                                </div>
-                            </div>
                         </div>
 
                         <!-- Security / Encryption -->
@@ -307,6 +286,98 @@
             </div>
         </div>
     </footer>
+
+    <!-- Bottom Sticky Action Bar -->
+    <div class="bottom-sticky-bar" id="bottomStickyBar">
+        <div class="sticky-bar-container">
+            <!-- Left Side: Selection status & Progress -->
+            <div class="sticky-status-info">
+                <div class="sticky-file-badge" id="stickyStatusBadge">
+                    <i data-lucide="layers" class="sticky-icon-sm"></i>
+                    <span id="stickyFileCount">0 items</span>
+                </div>
+                <div class="sticky-progress-container" id="stickyProgressContainer" style="display: none;">
+                    <svg class="spinner" viewBox="0 0 50 50">
+                        <circle class="path" cx="25" cy="25" r="20" fill="none" stroke-width="5"></circle>
+                    </svg>
+                    <span id="stickyProgressText">Processing...</span>
+                </div>
+            </div>
+
+            <!-- Right Side: Action Trigger Groups -->
+            <div class="sticky-actions-group">
+                <!-- 1st: Export PDF Group (Separate PDFs / Single PDF) -->
+                <div class="sticky-dropdown-wrapper" id="stickyPdfDropdown">
+                    <button type="button" class="btn btn-primary sticky-action-btn" id="btnStickyExportPdf" disabled aria-expanded="false" aria-haspopup="true">
+                        <i data-lucide="file-down"></i>
+                        <span class="btn-text-label">Export PDF</span>
+                        <i data-lucide="chevron-up" class="chevron-indicator"></i>
+                    </button>
+                    <div class="sticky-menu-card" id="stickyPdfMenu">
+                        <div class="sticky-menu-heading">
+                            <i data-lucide="file-text" class="menu-heading-icon"></i>
+                            <span>PDF Export Options</span>
+                        </div>
+                        <div class="sticky-menu-items">
+                            <button type="button" class="sticky-menu-btn" id="btnStickySeparatePdf" title="Export each page as an individual PDF">
+                                <div class="menu-btn-icon">
+                                    <i data-lucide="copy"></i>
+                                </div>
+                                <div class="menu-btn-text">
+                                    <span class="menu-btn-title">Separate PDFs</span>
+                                    <span class="menu-btn-subtitle">Download each page as its own PDF</span>
+                                </div>
+                            </button>
+                            <button type="button" class="sticky-menu-btn" id="btnStickySinglePdf" title="Combine all pages into one PDF document">
+                                <div class="menu-btn-icon">
+                                    <i data-lucide="book-open"></i>
+                                </div>
+                                <div class="menu-btn-text">
+                                    <span class="menu-btn-title">Single PDF</span>
+                                    <span class="menu-btn-subtitle">Merge all pages into one document</span>
+                                </div>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 2nd: Save Images Group (Separate Images & Zip Images) -->
+                <div class="sticky-dropdown-wrapper" id="stickyImgDropdown">
+                    <button type="button" class="btn btn-secondary sticky-action-btn sticky-images-trigger" id="btnStickySaveImages" disabled aria-expanded="false" aria-haspopup="true">
+                        <i data-lucide="image-down"></i>
+                        <span class="btn-text-label">Save Images</span>
+                        <i data-lucide="chevron-up" class="chevron-indicator"></i>
+                    </button>
+                    <div class="sticky-menu-card" id="stickyImgMenu">
+                        <div class="sticky-menu-heading">
+                            <i data-lucide="images" class="menu-heading-icon"></i>
+                            <span>Image Save Options</span>
+                        </div>
+                        <div class="sticky-menu-items">
+                            <button type="button" class="sticky-menu-btn" id="btnStickySeparateImages" title="Download all images as separate files">
+                                <div class="menu-btn-icon">
+                                    <i data-lucide="image"></i>
+                                </div>
+                                <div class="menu-btn-text">
+                                    <span class="menu-btn-title">Separate Images</span>
+                                    <span class="menu-btn-subtitle">Download each image individually</span>
+                                </div>
+                            </button>
+                            <button type="button" class="sticky-menu-btn" id="btnStickyZipImages" title="Download all images packaged in a .zip archive">
+                                <div class="menu-btn-icon">
+                                    <i data-lucide="archive"></i>
+                                </div>
+                                <div class="menu-btn-text">
+                                    <span class="menu-btn-title">Zip Images</span>
+                                    <span class="menu-btn-subtitle">Package all images in a .zip file</span>
+                                </div>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Edit Modal Popup -->
     <div class="crop-modal-overlay" id="editModal" style="display: none;">
@@ -492,7 +563,7 @@
     </div>
 
     <!-- App JavaScript -->
-    <script src="app.js?v=41"></script>
+    <script src="app.js?v=43"></script>
 </body>
 
 </html>
