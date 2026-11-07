@@ -1,5 +1,5 @@
 /* ==========================================================================
-   LuminaPDF Application Script (State, UI Mechanics, & PDF Generation)
+   PicToPDF Application Script (State, UI Mechanics, & PDF Generation)
    ========================================================================== */
 
 // Make jsPDF & PDF.js worker available via standard ES global or UMD
@@ -21,7 +21,7 @@ const STATE = {
         orientation: 'auto',     // 'auto', 'portrait', 'landscape'
         margin: 'none',          // 'none', 'thin', 'normal'
         imageFitting: 'fit',     // 'fit', 'fill', 'stretch'
-        imageQuality: 90,        // 10 to 100 (JPEG compression percent)
+        imageQuality: 100,       // Default 100% (Original lossless quality, zero upload compression)
         mergeMode: 'single',     // 'single' (one combined PDF) or 'separate' (separate files)
         enablePassword: false,   // Whether password protection is enabled
         pdfPassword: '',         // The password for encryption
@@ -44,8 +44,6 @@ const DOM = {
     pageSize: document.getElementById('pageSize'),
     orientationGroup: document.getElementById('orientationGroup'),
     imageFittingGroup: document.getElementById('imageFittingGroup'),
-    qualitySlider: document.getElementById('imageQuality'),
-    qualityValue: document.getElementById('qualityValue'),
     virtualPreviewCanvas: document.getElementById('virtualPreviewCanvas'),
     previewPlaceholder: document.getElementById('previewPlaceholder'),
     previewPagination: document.getElementById('previewPagination'),
@@ -54,7 +52,6 @@ const DOM = {
     prevPreview: document.getElementById('prevPreview'),
     nextPreview: document.getElementById('nextPreview'),
     btnConvert: document.getElementById('btnConvert'),
-    btnExtractZip: document.getElementById('btnExtractZip'),
     sizeIndicatorGroup: document.getElementById('sizeIndicatorGroup'),
     estimatedPdfSize: document.getElementById('estimatedPdfSize'),
     settingsHeader: document.getElementById('settingsHeader'),
@@ -137,13 +134,11 @@ document.addEventListener('DOMContentLoaded', () => {
     updateUIState();
 });
 
-// Theme Setup (System Preferences color scheme query)
 function initTheme() {
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     STATE.theme = prefersDark ? 'dark' : 'light';
     applyTheme();
 
-    // Listen to browser/system theme changes dynamically
     window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
         STATE.theme = e.matches ? 'dark' : 'light';
         applyTheme();
@@ -172,17 +167,14 @@ function hasFiles(types) {
 }
 
 function initEventListeners() {
-    // Collapsible Settings Panel Toggle
     if (DOM.settingsHeader && DOM.settingsCard) {
         DOM.settingsHeader.addEventListener('click', () => {
             DOM.settingsCard.classList.toggle('collapsed');
         });
     }
 
-    // File Input selection
     DOM.fileInput.addEventListener('change', handleFileSelection);
 
-    // Browse Files button trigger
     if (DOM.btnBrowse) {
         DOM.btnBrowse.addEventListener('click', (e) => {
             e.preventDefault();
@@ -191,15 +183,12 @@ function initEventListeners() {
         });
     }
 
-    // Paste Clipboard button trigger
     if (DOM.btnPaste) {
         DOM.btnPaste.addEventListener('click', handlePasteButtonClick);
     }
 
-    // Global Paste Event Listener (Ctrl+V / Cmd+V)
     document.addEventListener('paste', handlePasteEvent);
 
-    // Dropzone card click trigger (clicking empty space in dropzone)
     if (DOM.dropZone) {
         DOM.dropZone.addEventListener('click', (e) => {
             if (e.target.closest('button') || e.target.closest('input')) return;
@@ -207,7 +196,6 @@ function initEventListeners() {
         });
     }
 
-    // Local Dropzone Events (Fallback/Visual highlight)
     ['dragenter', 'dragover'].forEach(eventName => {
         DOM.dropZone.addEventListener(eventName, (e) => {
             e.preventDefault();
@@ -222,17 +210,14 @@ function initEventListeners() {
         }, false);
     });
 
-    // Global Window Drop Anywhere Events
     let dragCounter = 0;
 
     window.addEventListener('dragenter', (e) => {
         e.preventDefault();
-        // Check if dragging files
         if (e.dataTransfer && hasFiles(e.dataTransfer.types)) {
             dragCounter++;
             if (DOM.globalDropOverlay) {
                 DOM.globalDropOverlay.style.display = 'flex';
-                // Small delay to allow display flex to apply before opacity transition
                 requestAnimationFrame(() => {
                     DOM.globalDropOverlay.classList.add('active');
                 });
@@ -241,12 +226,11 @@ function initEventListeners() {
     });
 
     window.addEventListener('dragover', (e) => {
-        e.preventDefault(); // Necessary to allow dropping
+        e.preventDefault();
     });
 
     window.addEventListener('dragleave', (e) => {
         e.preventDefault();
-        // Check if dragging files
         if (e.dataTransfer && hasFiles(e.dataTransfer.types)) {
             dragCounter--;
             if (dragCounter <= 0) {
@@ -257,7 +241,7 @@ function initEventListeners() {
                         if (dragCounter <= 0) {
                             DOM.globalDropOverlay.style.display = 'none';
                         }
-                    }, 300); // match CSS transition duration
+                    }, 300);
                 }
             }
         }
@@ -283,16 +267,11 @@ function initEventListeners() {
         }
     });
 
-
-
-    // Clear All Action
     DOM.btnClearAll.addEventListener('click', clearAllFiles);
 
-    // Advanced Page Size Dropdown Settings
     DOM.pageSize.addEventListener('change', (e) => {
         STATE.settings.pageSize = e.target.value;
 
-        // Show/hide orientation and fitting groups based on page size selection
         if (STATE.settings.pageSize === 'original') {
             DOM.orientationGroup.style.display = 'none';
             DOM.imageFittingGroup.style.display = 'none';
@@ -304,10 +283,8 @@ function initEventListeners() {
         updateUIState();
     });
 
-    // Tab buttons for Orientation & Page Margins
     setupTabSelectors();
 
-    // Fitting Mode change
     const imageFittingSelect = document.getElementById('imageFitting');
     if (imageFittingSelect) {
         imageFittingSelect.addEventListener('change', (e) => {
@@ -316,53 +293,9 @@ function initEventListeners() {
         });
     }
 
-    // Quality slider
-    let bulkQualityPreviewTimer = null;
-    DOM.qualitySlider.addEventListener('input', (e) => {
-        const val = parseInt(e.target.value);
-        STATE.settings.imageQuality = val;
-        DOM.qualityValue.textContent = val === 100 ? 'Original' : `${val}%`;
-
-        // Do one batched DOM update after dragging pauses instead of scanning every card
-        // on every pointer/input event.
-        if (bulkQualityPreviewTimer !== null) clearTimeout(bulkQualityPreviewTimer);
-        bulkQualityPreviewTimer = setTimeout(() => {
-            bulkQualityPreviewTimer = null;
-            DOM.imageListContainer.querySelectorAll('.inline-quality-slider').forEach(slider => {
-                slider.value = val;
-            });
-            DOM.imageListContainer.querySelectorAll('.inline-quality-badge').forEach(badge => {
-                badge.textContent = val === 100 ? 'Original' : `${val}%`;
-            });
-        }, 80);
-    });
-
-    DOM.qualitySlider.addEventListener('change', () => {
-        // The browser emits "change" once the user finishes adjusting the slider.
-        // Calculate the PDF size only for the final quality value, not for every drag step.
-        if (bulkQualityPreviewTimer !== null) {
-            clearTimeout(bulkQualityPreviewTimer);
-            bulkQualityPreviewTimer = null;
-        }
-
-        const val = STATE.settings.imageQuality;
-        STATE.files.forEach(fileObj => {
-            if (fileObj.quality === val) return;
-            fileObj.quality = val;
-            fileObj.exactPdfSize = null;
-            fileObj.sizeFingerprint = null;
-        });
-        STATE.compiledCache = null;
-
-        recalculateEstimatedPDFSize();
-    });
-
-    // Strategy merge mode choices
     setupSwitchSelectors();
 
-    // Password Protection logic
     if (DOM.togglePasswordBtn && DOM.enablePassword && DOM.passwordInputContainer && DOM.pdfPassword) {
-        // Handle clicking the container to toggle checkbox
         DOM.togglePasswordBtn.addEventListener('click', (e) => {
             if (e.target !== DOM.enablePassword) {
                 DOM.enablePassword.checked = !DOM.enablePassword.checked;
@@ -371,7 +304,6 @@ function initEventListeners() {
             }
         });
 
-        // Handle checkbox change
         DOM.enablePassword.addEventListener('change', (e) => {
             STATE.settings.enablePassword = e.target.checked;
             if (e.target.checked) {
@@ -385,14 +317,12 @@ function initEventListeners() {
             updateUIState();
         });
 
-        // Handle password input
         DOM.pdfPassword.addEventListener('input', (e) => {
             STATE.settings.pdfPassword = e.target.value;
             updateUIState();
         });
     }
 
-    // Watermark logic
     if (DOM.watermarkText) {
         DOM.watermarkText.addEventListener('input', (e) => {
             STATE.settings.watermarkText = e.target.value;
@@ -400,16 +330,12 @@ function initEventListeners() {
         });
     }
 
-    // Preview navigation
     DOM.prevPreview.addEventListener('click', () => navigatePreview(-1));
     DOM.nextPreview.addEventListener('click', () => navigatePreview(1));
 
-    // Convert Button
     DOM.btnConvert.addEventListener('click', convertImagesToPDF);
-
 }
 
-// Custom tabs (Orientation / Margins) event handling
 function setupTabSelectors() {
     const tabGroups = document.querySelectorAll('.tab-selector');
     tabGroups.forEach(group => {
@@ -431,7 +357,6 @@ function setupTabSelectors() {
     });
 }
 
-// Custom Switch Option selectors (Merge strategy)
 function setupSwitchSelectors() {
     const options = document.querySelectorAll('.switch-option');
     options.forEach(opt => {
@@ -458,17 +383,14 @@ function applyLargeUploadDefaults() {
     STATE.settings.pageSize = 'original';
     STATE.settings.imageQuality = 100;
 
-    DOM.pageSize.value = 'original';
-    DOM.qualitySlider.value = 100;
-    DOM.qualityValue.textContent = 'Original';
-
+    if (DOM.pageSize) DOM.pageSize.value = 'original';
     if (DOM.orientationGroup) DOM.orientationGroup.style.display = 'none';
     if (DOM.imageFittingGroup) DOM.imageFittingGroup.style.display = 'none';
 
     STATE.files.forEach(fileObj => {
         fileObj.quality = 100;
-        fileObj.exactPdfSize = null;
-        fileObj.sizeFingerprint = null;
+        fileObj.exactPdfSize = (fileObj.currentBytes || fileObj.originalBytes) + 1500;
+        fileObj.sizeFingerprint = getFileSizeFingerprint(fileObj);
     });
 
     DOM.imageListContainer.querySelectorAll('.inline-quality-slider').forEach(slider => {
@@ -477,15 +399,12 @@ function applyLargeUploadDefaults() {
     DOM.imageListContainer.querySelectorAll('.inline-quality-badge').forEach(badge => {
         badge.textContent = 'Original';
     });
-
-    showToast('More than 50 pages: Page Size and Quality set to Original (100%)');
 }
 
 /* ==========================================================================
    Clipboard & Paste Mechanics
    ========================================================================== */
 async function handlePasteEvent(e) {
-    // Ignore paste if user is typing inside text input/textarea/editable element
     const activeEl = document.activeElement;
     if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable)) {
         if (activeEl.type === 'text' || activeEl.type === 'password' || activeEl.type === 'textarea' || activeEl.isContentEditable) {
@@ -498,15 +417,12 @@ async function handlePasteEvent(e) {
 
     const filesToProcess = [];
 
-    // 1. Check direct file objects in clipboard (copied files from File Explorer / Desktop)
     if (clipboardData.files && clipboardData.files.length > 0) {
         for (let i = 0; i < clipboardData.files.length; i++) {
-            const f = clipboardData.files[i];
-            filesToProcess.push(f);
+            filesToProcess.push(clipboardData.files[i]);
         }
     }
 
-    // 2. Check items in clipboard (screenshots, copied images, PDF blobs)
     if (filesToProcess.length === 0 && clipboardData.items) {
         const items = clipboardData.items;
         for (let i = 0; i < items.length; i++) {
@@ -522,7 +438,6 @@ async function handlePasteEvent(e) {
                     filesToProcess.push(file);
                 }
             } else if (item.kind === 'string' && item.type === 'text/plain') {
-                // Check if user pasted a base64 data URL
                 item.getAsString((text) => {
                     const trimmed = text.trim();
                     if (trimmed.startsWith('data:image/') || trimmed.startsWith('data:application/pdf')) {
@@ -556,7 +471,6 @@ async function handlePasteButtonClick(e) {
         e.stopPropagation();
     }
 
-    // Try System Async Clipboard API
     if (navigator.clipboard && typeof navigator.clipboard.read === 'function') {
         try {
             const clipboardItems = await navigator.clipboard.read();
@@ -648,59 +562,56 @@ async function processPdfFile(file) {
 
         for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
             const page = await pdf.getPage(pageNum);
-            const scale = 2.0; // Render at 2x scaling for high-resolution text & graphics
+            const scale = 2.0;
             const viewport = page.getViewport({ scale: scale });
 
             const canvas = document.createElement('canvas');
             canvas.width = viewport.width;
             canvas.height = viewport.height;
-            const ctx = canvas.getContext('2d');
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-            const renderContext = {
+            await page.render({
                 canvasContext: ctx,
                 viewport: viewport
-            };
+            }).promise;
 
-            await page.render(renderContext).promise;
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
 
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
-
-            // Release GPU canvas memory immediately
             canvas.width = 0;
             canvas.height = 0;
             page.cleanup();
 
-            // Calculate size estimation for this page
             const base64Length = dataUrl.length;
             const headerIndex = dataUrl.indexOf(',');
             const dataLength = headerIndex !== -1 ? base64Length - headerIndex - 1 : base64Length;
             const approxBytes = Math.round(dataLength * 0.75);
-
-            const pageName = file.name;
 
             const pageRecord = {
                 id: Date.now() + Math.random().toString(36).substr(2, 5),
                 file: file,
                 dataUrl: dataUrl,
                 originalDataUrl: dataUrl,
-                quality: STATE.settings.imageQuality,
-                width: Math.round(viewport.width / scale), // native dimensions
+                previewUrl: dataUrl,
+                originalPreviewUrl: dataUrl,
+                quality: 100,
+                width: Math.round(viewport.width / scale),
                 height: Math.round(viewport.height / scale),
-                name: pageName,
+                name: file.name,
                 originalBytes: approxBytes,
+                currentBytes: approxBytes,
+                exactPdfSize: approxBytes + 1500,
                 sizeText: formatFileSize(approxBytes),
                 type: 'image/jpeg',
                 isPdfPage: true,
                 pdfPageNum: pageNum,
                 pdfTotalPages: pdf.numPages
             };
+            pageRecord.sizeFingerprint = getFileSizeFingerprint(pageRecord);
 
             pageRecords.push(pageRecord);
         }
 
-        // Clean up PDF document and terminate worker thread
         pdf.destroy();
-
         return pageRecords;
     } catch (err) {
         console.error("Failed to parse PDF file:", file.name, err);
@@ -709,14 +620,12 @@ async function processPdfFile(file) {
     }
 }
 
-// Parse uploaded assets (Images, HEIC, and PDFs) asynchronously in parallel
+// Parse uploaded assets (Images, HEIC, and PDFs) with 0% GPU overhead and single-pass WASM
 async function processFiles(files) {
     const validFiles = Array.from(files).filter(f => {
-        // Safe check MIME type
         if (f.type && (f.type.startsWith('image/') || f.type === 'application/pdf')) {
             return true;
         }
-        // Fallback: check extension in filename for Android & mobile picker compatibility
         if (f.name) {
             const ext = f.name.split('.').pop().toLowerCase();
             const validExtensions = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg', 'heic', 'heif', 'bmp', 'tiff', 'pdf'];
@@ -730,11 +639,12 @@ async function processFiles(files) {
         return;
     }
 
-    // Display loader state on export button
     DOM.btnConvert.disabled = true;
     const btnTextEl = DOM.btnConvert.querySelector('.btn-text');
     const btnLoadEl = DOM.btnConvert.querySelector('.btn-loading');
+    const spinnerEl = btnLoadEl ? btnLoadEl.querySelector('.spinner') : null;
     const progressEl = document.getElementById('compilationProgress');
+    const glowBgEl = document.getElementById('glowBg');
 
     let hasHeicOrPdf = false;
     validFiles.forEach(file => {
@@ -744,13 +654,88 @@ async function processFiles(files) {
         }
     });
 
+    // Pause 60 FPS GPU spinner & blur compositing during heavy WASM decode so GPU stays at 0%
     if (hasHeicOrPdf && btnTextEl && btnLoadEl && progressEl) {
         btnTextEl.style.display = 'none';
         btnLoadEl.style.display = 'inline-flex';
-        progressEl.textContent = 'Processing files...';
+        if (spinnerEl) spinnerEl.style.display = 'none';
+        if (glowBgEl) glowBgEl.style.display = 'none';
+        progressEl.textContent = 'Converting HEIC (CPU Turbo)...';
+        await new Promise(r => setTimeout(r, 16));
     }
 
-    // Helper function to process a single image file (supporting parallel calls)
+    // Force 2D canvases created by heic-to.js onto CPU RAM (willReadFrequently: true) to prevent 100% GPU spikes
+    const origGetContext = HTMLCanvasElement.prototype.getContext;
+    const origOffscreenGetContext = typeof OffscreenCanvas !== 'undefined' ? OffscreenCanvas.prototype.getContext : null;
+
+    function enableCpuCanvasMode() {
+        HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+            if (type === '2d') {
+                attrs = Object.assign({}, attrs, { willReadFrequently: true });
+            }
+            return origGetContext.call(this, type, attrs);
+        };
+        if (origOffscreenGetContext) {
+            OffscreenCanvas.prototype.getContext = function (type, attrs) {
+                if (type === '2d') {
+                    attrs = Object.assign({}, attrs, { willReadFrequently: true });
+                }
+                return origOffscreenGetContext.call(this, type, attrs);
+            };
+        }
+    }
+
+    function restoreCanvasMode() {
+        HTMLCanvasElement.prototype.getContext = origGetContext;
+        if (origOffscreenGetContext) {
+            OffscreenCanvas.prototype.getContext = origOffscreenGetContext;
+        }
+    }
+
+    // Fast <1ms binary JPEG header parser (reads width/height without decoding the image)
+    async function getFastImageDimensions(blob, previewUrl) {
+        if (blob && (blob.type === 'image/jpeg' || blob.type === 'image/jpg')) {
+            try {
+                const slice = blob.slice(0, 65536);
+                const buffer = await slice.arrayBuffer();
+                const view = new DataView(buffer);
+                if (view.byteLength >= 4 && view.getUint16(0, false) === 0xFFD8) {
+                    let offset = 2;
+                    while (offset + 9 < view.byteLength) {
+                        if (view.getUint8(offset) !== 0xFF) break;
+                        const marker = view.getUint8(offset + 1);
+                        if (marker === 0xFF) {
+                            offset++;
+                            continue;
+                        }
+                        if (marker === 0xC0 || marker === 0xC1 || marker === 0xC2) {
+                            const height = view.getUint16(offset + 5, false);
+                            const width = view.getUint16(offset + 7, false);
+                            if (width > 0 && height > 0) {
+                                return { width, height };
+                            }
+                            break;
+                        }
+                        const segLength = view.getUint16(offset + 2, false);
+                        if (segLength < 2) break;
+                        offset += 2 + segLength;
+                    }
+                }
+            } catch (_) {}
+        }
+
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.decoding = 'async';
+            img.onload = () => resolve({
+                width: img.naturalWidth || img.width,
+                height: img.naturalHeight || img.height
+            });
+            img.onerror = () => resolve(null);
+            img.src = previewUrl;
+        });
+    }
+
     async function processSingleImageFile(file) {
         let fileToProcess = file;
         let resolvedType = file.type;
@@ -758,139 +743,90 @@ async function processFiles(files) {
         const isHeic = ext === 'heic' || ext === 'heif' || (resolvedType && (resolvedType.includes('heic') || resolvedType.includes('heif')));
 
         if (isHeic) {
-            // Check if browser natively supports HEIC decoding (Safari on iOS/macOS bypass)
-            const supportsNativeHeic = (() => {
-                const ua = navigator.userAgent.toLowerCase();
-                const isSafari = ua.includes('safari') && !ua.includes('chrome') && !ua.includes('chromium');
-                const isApple = ua.includes('iphone') || ua.includes('ipad') || ua.includes('macintosh');
-                return isSafari && isApple;
-            })();
-
-            if (supportsNativeHeic) {
-                console.log(`Safari native HEIC support detected for ${file.name}. Bypassing transcoder.`);
-            } else {
-                let convertFn = null;
-                if (typeof HeicTo === 'function') {
-                    convertFn = HeicTo;
-                } else if (typeof HeicTo === 'object' && typeof HeicTo.heicTo === 'function') {
-                    convertFn = HeicTo.heicTo;
-                } else if (typeof heicTo === 'function') {
-                    convertFn = heicTo;
-                }
-
-                if (convertFn) {
-                    try {
-                        let imageBitmap = null;
-                        try {
-                            imageBitmap = await convertFn({
-                                blob: file,
-                                type: 'bitmap'
-                            });
-                        } catch (bitmapErr) {
-                            console.warn("Bitmap fast-path failed, falling back to standard canvas transcoding:", bitmapErr);
-                        }
-
-                        if (imageBitmap) {
-                            const canvas = document.createElement('canvas');
-                            canvas.width = imageBitmap.width;
-                            canvas.height = imageBitmap.height;
-                            const ctx = canvas.getContext('2d');
-                            ctx.drawImage(imageBitmap, 0, 0);
-                            imageBitmap.close();
-
-                            const mainThreadBlob = await new Promise((resolve, reject) => {
-                                canvas.toBlob((b) => {
-                                    if (b) resolve(b);
-                                    else reject(new Error("Main-thread canvas compression failed"));
-                                }, 'image/jpeg', 0.82);
-                            });
-
-                            const newName = file.name.replace(/\.[^/.]+$/, "") + '.jpg';
-                            fileToProcess = new File([mainThreadBlob], newName, { type: 'image/jpeg' });
-                            resolvedType = 'image/jpeg';
-                        } else {
-                            const convertedBlob = await convertFn({
-                                blob: file,
-                                type: 'image/jpeg',
-                                quality: 0.82
-                            });
-                            const singleBlob = Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob;
-                            const newName = file.name.replace(/\.[^/.]+$/, "") + '.jpg';
-                            fileToProcess = new File([singleBlob], newName, { type: 'image/jpeg' });
-                            resolvedType = 'image/jpeg';
-                        }
-                    } catch (heicErr) {
-                        console.error('HEIC conversion failed for:', file.name, heicErr);
-                        if (window.location.protocol === 'file:') {
-                            alert(`HEIC Transcoding Failed for "${file.name}"!\n\nYou are running PicToPDF directly from local files (file:// protocol).\n\nModern browsers enforce strict security sandboxes on local files, which can block dynamic WebAssembly decoders.\n\nTo convert HEIC images, please serve this directory using a local web server:\n1. Open your terminal in this directory\n2. Run: python -m http.server 8000  (or npx http-server)\n3. Navigate to: http://localhost:8000`);
-                        } else {
-                            alert(`HEIC Transcoding Failed for "${file.name}": ${heicErr.message || heicErr}\n\nThe HEIC image might be corrupted or unsupported.`);
-                        }
-                        throw heicErr;
-                    }
-                } else {
-                    const err = new Error("HEIC transcoder library is not loaded in the DOM.");
-                    console.warn(err.message);
-                    alert("HEIC Conversion Failed: The transcoding library (heic-to.js) failed to load.");
-                    throw err;
-                }
+            let convertFn = null;
+            if (typeof HeicTo === 'function') {
+                convertFn = HeicTo;
+            } else if (typeof HeicTo === 'object' && typeof HeicTo.heicTo === 'function') {
+                convertFn = HeicTo.heicTo;
+            } else if (typeof heicTo === 'function') {
+                convertFn = heicTo;
             }
+
+            if (!convertFn) {
+                alert("HEIC Conversion Failed: The transcoding library (heic-to.js) failed to load.");
+                throw new Error("HEIC transcoder library is not loaded.");
+            }
+
+            try {
+                enableCpuCanvasMode();
+                const convertedBlob = await convertFn({
+                    blob: file,
+                    type: 'image/jpeg',
+                    quality: 0.82
+                });
+                const singleBlob = Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob;
+                const newName = file.name.replace(/\.[^/.]+$/, "") + '.jpg';
+                fileToProcess = new File([singleBlob], newName, { type: 'image/jpeg' });
+                resolvedType = 'image/jpeg';
+            } catch (heicErr) {
+                console.error('HEIC conversion failed for:', file.name, heicErr);
+                alert(`HEIC Transcoding Failed for "${file.name}": ${heicErr.message || heicErr}`);
+                throw heicErr;
+            } 
         }
 
-        // Resolve MIME type for Android pickers that return empty or generic streams
         if (!resolvedType || resolvedType === 'application/octet-stream') {
-            const ext = fileToProcess.name ? fileToProcess.name.split('.').pop().toLowerCase() : '';
-            if (ext === 'png') resolvedType = 'image/png';
-            else if (ext === 'webp') resolvedType = 'image/webp';
-            else if (ext === 'svg') resolvedType = 'image/svg+xml';
-            else if (ext === 'gif') resolvedType = 'image/gif';
+            const fileExt = fileToProcess.name ? fileToProcess.name.split('.').pop().toLowerCase() : '';
+            if (fileExt === 'png') resolvedType = 'image/png';
+            else if (fileExt === 'webp') resolvedType = 'image/webp';
+            else if (fileExt === 'svg') resolvedType = 'image/svg+xml';
+            else if (fileExt === 'gif') resolvedType = 'image/gif';
             else resolvedType = 'image/jpeg';
         }
 
-        // Read image file into data URL & record
-        return new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onload = function (e) {
-                const dataUrl = e.target.result;
-                const img = new Image();
-                img.onload = function () {
-                    const base64Length = dataUrl.length;
-                    const headerIndex = dataUrl.indexOf(',');
-                    const dataLength = headerIndex !== -1 ? base64Length - headerIndex - 1 : base64Length;
-                    const approxBytes = Math.round(dataLength * 0.75);
+        const previewUrl = URL.createObjectURL(fileToProcess);
 
-                    const fileRecord = {
-                        id: Date.now() + Math.random().toString(36).substr(2, 5),
-                        file: fileToProcess,
-                        dataUrl: dataUrl,
-                        originalDataUrl: dataUrl,
-                        quality: STATE.settings.imageQuality,
-                        width: img.width,
-                        height: img.height,
-                        name: fileToProcess.name,
-                        originalBytes: approxBytes,
-                        sizeText: formatFileSize(approxBytes),
-                        type: resolvedType
-                    };
-                    resolve([fileRecord]);
-                };
-                img.onerror = function () {
-                    console.error("Failed to load image element for file:", fileToProcess.name);
-                    alert("Unable to decode '" + fileToProcess.name + "'. The image might be unsupported by the browser or corrupted.");
-                    resolve([]);
-                };
-                img.src = dataUrl;
-            };
-            reader.onerror = function () {
-                console.error("FileReader failed for file:", fileToProcess.name);
-                resolve([]);
-            };
+        const dataUrlPromise = new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = (e) => resolve(e.target.result);
+            reader.onerror = () => resolve(null);
             reader.readAsDataURL(fileToProcess);
         });
+
+        const dimensionsPromise = getFastImageDimensions(fileToProcess, previewUrl);
+
+        const [dataUrl, dims] = await Promise.all([dataUrlPromise, dimensionsPromise]);
+
+        if (!dataUrl || !dims) {
+            URL.revokeObjectURL(previewUrl);
+            alert("Unable to decode '" + fileToProcess.name + "'. The image might be unsupported by the browser or corrupted.");
+            return [];
+        }
+
+        const approxBytes = fileToProcess.size || Math.round((dataUrl.length - (dataUrl.indexOf(',') + 1)) * 0.75);
+
+        const fileRecord = {
+            id: Date.now() + Math.random().toString(36).substr(2, 5),
+            file: fileToProcess,
+            dataUrl: dataUrl,
+            originalDataUrl: dataUrl,
+            previewUrl: previewUrl,
+            originalPreviewUrl: previewUrl,
+            quality: 100,
+            width: dims.width,
+            height: dims.height,
+            name: fileToProcess.name,
+            originalBytes: approxBytes,
+            currentBytes: approxBytes,
+            exactPdfSize: approxBytes + 1500,
+            sizeText: formatFileSize(approxBytes),
+            type: resolvedType
+        };
+        fileRecord.sizeFingerprint = getFileSizeFingerprint(fileRecord);
+
+        return [fileRecord];
     }
 
-    // Execute bounded parallel file tasks. This uses available cores without
-    // creating hundreds of simultaneous decoders and exhausting browser memory.
     async function runParallelPool(items, worker, concurrency) {
         const results = new Array(items.length);
         let nextIndex = 0;
@@ -904,41 +840,52 @@ async function processFiles(files) {
         return results;
     }
 
-    const hardwareConcurrency = navigator.hardwareConcurrency || 4;
-    const fileConcurrency = Math.max(4, Math.min(16, hardwareConcurrency));
-    const resultsArray = await runParallelPool(validFiles, async (file) => {
-        const ext = file.name ? file.name.split('.').pop().toLowerCase() : '';
-        const isPdf = ext === 'pdf' || (file.type && file.type === 'application/pdf');
-
-        if (isPdf) {
-            return await processPdfFile(file);
-        } else {
-            return await processSingleImageFile(file).catch(err => {
-                console.error("Skipping failed image file during extraction:", file.name, err);
-                return [];
-            });
+    try {
+        if (hasHeicOrPdf) {
+            enableCpuCanvasMode();
         }
-    }, fileConcurrency);
-    const allRecords = resultsArray.flat().filter(rec => rec !== null && rec !== undefined);
+        const hardwareConcurrency = navigator.hardwareConcurrency || 4;
+        // Convert 2 to 4 HEIC/PDF files in parallel (4 to 8 for standard images)
+        const fileConcurrency = hasHeicOrPdf
+            ? Math.max(2, Math.min(4, hardwareConcurrency))
+            : Math.max(4, Math.min(8, hardwareConcurrency));
 
-    if (allRecords.length > 0) {
-        STATE.files.push(...allRecords);
-        STATE.activePageIdx = STATE.files.length - 1; // Set last loaded page active
-        if (STATE.files.length > 50) {
-            applyLargeUploadDefaults();
+        const resultsArray = await runParallelPool(validFiles, async (file) => {
+            const ext = file.name ? file.name.split('.').pop().toLowerCase() : '';
+            const isPdf = ext === 'pdf' || (file.type && file.type === 'application/pdf');
+
+            if (isPdf) {
+                return await processPdfFile(file);
+            } else {
+                return await processSingleImageFile(file).catch(err => {
+                    console.error("Skipping failed image file during extraction:", file.name, err);
+                    return [];
+                });
+            }
+        }, fileConcurrency);
+
+        const allRecords = resultsArray.flat().filter(rec => rec !== null && rec !== undefined);
+
+        if (allRecords.length > 0) {
+            STATE.files.push(...allRecords);
+            STATE.activePageIdx = STATE.files.length - 1;
+            if (STATE.files.length > 50) {
+                applyLargeUploadDefaults();
+            }
+            updateUIState();
         }
-        updateUIState();
-    }
-
-    // Reset input element & restore buttons
-    DOM.fileInput.value = '';
-    if (btnTextEl && btnLoadEl) {
-        btnTextEl.style.display = 'inline-flex';
-        btnLoadEl.style.display = 'none';
+    } finally {
+        restoreCanvasMode();
+        DOM.fileInput.value = '';
+        if (spinnerEl) spinnerEl.style.display = '';
+        if (glowBgEl) glowBgEl.style.display = '';
+        if (btnTextEl && btnLoadEl) {
+            btnTextEl.style.display = 'inline-flex';
+            btnLoadEl.style.display = 'none';
+        }
     }
 }
 
-// Format raw bytes
 function formatFileSize(bytes) {
     if (bytes === 0) return '0 Bytes';
     const k = 1024;
@@ -988,9 +935,18 @@ function updateSizeBadge(badge, label, bytes) {
     }, 180);
 }
 
-
+function revokeFileObjectUrls(fileObj) {
+    if (!fileObj) return;
+    if (fileObj.previewUrl && fileObj.previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(fileObj.previewUrl);
+    }
+    if (fileObj.originalPreviewUrl && fileObj.originalPreviewUrl.startsWith('blob:') && fileObj.originalPreviewUrl !== fileObj.previewUrl) {
+        URL.revokeObjectURL(fileObj.originalPreviewUrl);
+    }
+}
 
 function clearAllFiles() {
+    STATE.files.forEach(revokeFileObjectUrls);
     STATE.files = [];
     STATE.activePageIdx = 0;
     updateUIState();
@@ -1006,9 +962,7 @@ function updateUIState() {
     if (fileCount === 0) {
         DOM.imageListCard.style.display = 'none';
         DOM.btnConvert.disabled = true;
-        if (DOM.btnExtractZip) DOM.btnExtractZip.disabled = true;
 
-        // Show layout preview placeholder
         DOM.previewPlaceholder.style.display = 'flex';
         const existingSheet = DOM.virtualPreviewCanvas.querySelector('.virtual-pdf-sheet');
         if (existingSheet) existingSheet.remove();
@@ -1021,10 +975,8 @@ function updateUIState() {
     } else {
         DOM.imageListCard.style.display = 'flex';
         DOM.btnConvert.disabled = false;
-        if (DOM.btnExtractZip) DOM.btnExtractZip.disabled = false;
         DOM.previewPlaceholder.style.display = 'none';
 
-        // Boundaries checks for navigation indicator index
         if (STATE.activePageIdx >= fileCount) {
             STATE.activePageIdx = fileCount - 1;
         }
@@ -1032,13 +984,12 @@ function updateUIState() {
             STATE.activePageIdx = 0;
         }
 
+        recalculateEstimatedPDFSize();
         renderUploadedGrid();
         renderVirtualLayoutPreview();
-        recalculateEstimatedPDFSize();
     }
 }
 
-// Display uploaded files with sorting capabilities and metadata
 function renderUploadedGrid() {
     DOM.imageListContainer.innerHTML = '';
     const gridFragment = document.createDocumentFragment();
@@ -1046,7 +997,7 @@ function renderUploadedGrid() {
     STATE.files.forEach((fileObj, index) => {
         const item = document.createElement('div');
         item.className = 'image-item-node animate-fade-in-up';
-        item.style.animationDelay = `${index * 0.05}s`;
+        item.style.animationDelay = `${Math.min(index * 0.02, 0.3)}s`;
         item.setAttribute('draggable', 'true');
         item.dataset.index = index;
 
@@ -1058,10 +1009,12 @@ function renderUploadedGrid() {
             fileObj.sizeFingerprint === getFileSizeFingerprint(fileObj);
         const individualSize = sizeIsCurrent ? fileObj.exactPdfSize : 0;
 
-        const qualityLabel = fileObj.quality === 100 ? 'Original' : `${fileObj.quality || 90}%`;
+        const currentQuality = fileObj.quality || 100;
+        const qualityLabel = currentQuality === 100 ? 'Original' : `${currentQuality}%`;
+        const thumbSrc = fileObj.previewUrl || fileObj.dataUrl;
 
         item.innerHTML = `
-            <img src="${fileObj.dataUrl}" alt="${fileObj.name}" class="node-thumbnail">
+            <img src="${thumbSrc}" alt="${fileObj.name}" class="node-thumbnail" loading="lazy" decoding="async">
             <div class="node-details">
                 <h4><span class="node-order" title="Upload order">${index + 1}</span>${fileObj.name}</h4>
                 <div class="node-meta" style="margin-bottom: 6px;">
@@ -1080,7 +1033,7 @@ function renderUploadedGrid() {
                 <!-- Per-Image Compression Slider -->
                 <div class="inline-quality-control" style="margin-bottom: 8px; display: flex; align-items: center; gap: 0.5rem; max-width: 250px;">
                     <span style="font-size: 0.72rem; color: var(--text-secondary); font-weight: 600; min-width: 50px;">Quality:</span>
-                    <input type="range" class="inline-quality-slider" data-index="${index}" min="10" max="100" value="${fileObj.quality || 90}" style="flex: 1; height: 4px; cursor: pointer;">
+                    <input type="range" class="inline-quality-slider" data-index="${index}" min="10" max="100" value="${currentQuality}" style="flex: 1; height: 4px; cursor: pointer;">
                     <span class="badge inline-quality-badge" data-index="${index}" style="font-size: 0.72rem; padding: 0.1rem 0.35rem; font-weight: 700; background-color: var(--border-color);">${qualityLabel}</span>
                 </div>
                 
@@ -1113,7 +1066,6 @@ function renderUploadedGrid() {
             </div>
         `;
 
-        // Bind inline slider listener with stopPropagation to prevent active card selection triggers
         const inlineSlider = item.querySelector('.inline-quality-slider');
         const inlineBadge = item.querySelector('.inline-quality-badge');
         const inlineControlRow = item.querySelector('.inline-quality-control');
@@ -1135,7 +1087,6 @@ function renderUploadedGrid() {
         });
 
         inlineSlider.addEventListener('change', () => {
-            // Calculate only after the user stops dragging this image's quality slider.
             if (inlineQualityPreviewFrame !== null) {
                 cancelAnimationFrame(inlineQualityPreviewFrame);
                 inlineQualityPreviewFrame = null;
@@ -1143,7 +1094,6 @@ function renderUploadedGrid() {
             recalculateEstimatedPDFSize(parseInt(inlineSlider.getAttribute('data-index')));
         });
 
-        // Prevent HTML5 Drag and Drop from interrupting slider usage
         const preventDrag = () => { item.draggable = false; };
         const restoreDrag = () => { item.draggable = true; };
         inlineSlider.addEventListener('pointerdown', preventDrag);
@@ -1155,26 +1105,21 @@ function renderUploadedGrid() {
             e.stopPropagation();
         });
 
-        // Active click background indicator for currently previewed page
         if (index === STATE.activePageIdx) {
             item.style.borderColor = 'var(--accent-solid)';
             item.style.backgroundColor = 'rgba(139, 92, 246, 0.04)';
         }
 
-        // Click item body to inspect in layout panel
         item.addEventListener('click', (e) => {
-            // Prevent trigger if clicking action items
             if (e.target.closest('button') || e.target.closest('i') || e.target.closest('input')) return;
             STATE.activePageIdx = index;
             updateUIState();
         });
 
-        // Drag and drop sorting events
         item.addEventListener('dragstart', (e) => {
             e.dataTransfer.effectAllowed = 'move';
             e.dataTransfer.setData('text/plain', index.toString());
             item.classList.add('dragging');
-            // Slight visual fade
             setTimeout(() => { item.style.opacity = '0.4'; }, 0);
         });
 
@@ -1182,14 +1127,12 @@ function renderUploadedGrid() {
             item.classList.remove('dragging');
             item.style.opacity = '1';
 
-            // Clean up dragover visual states on all nodes
             document.querySelectorAll('.image-item-node').forEach(node => {
                 node.classList.remove('drag-over-top', 'drag-over-bottom');
             });
         });
 
         item.addEventListener('dragover', (e) => {
-            // Ignore if dragging external files
             if (e.dataTransfer && hasFiles(e.dataTransfer.types)) {
                 return;
             }
@@ -1197,7 +1140,6 @@ function renderUploadedGrid() {
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
 
-            // Check bounding box to decide if dropping before or after
             const rect = item.getBoundingClientRect();
             const relY = e.clientY - rect.top;
             if (relY < rect.height / 2) {
@@ -1209,12 +1151,11 @@ function renderUploadedGrid() {
             }
         });
 
-        item.addEventListener('dragleave', (e) => {
+        item.addEventListener('dragleave', () => {
             item.classList.remove('drag-over-top', 'drag-over-bottom');
         });
 
         item.addEventListener('drop', (e) => {
-            // Ignore if dropping external files
             if (e.dataTransfer && hasFiles(e.dataTransfer.types)) {
                 item.classList.remove('drag-over-top', 'drag-over-bottom');
                 return;
@@ -1230,16 +1171,13 @@ function renderUploadedGrid() {
 
             if (dragIndex === dropIndex || isNaN(dragIndex)) return;
 
-            // Move item in array
             const movedItem = STATE.files.splice(dragIndex, 1)[0];
 
-            // If dropping into bottom half, place after, else place before
             const rect = item.getBoundingClientRect();
             const relY = e.clientY - rect.top;
 
             let finalIndex = dropIndex;
             if (dragIndex < dropIndex) {
-                // Since we removed item, array shifted left
                 finalIndex = relY < rect.height / 2 ? dropIndex - 1 : dropIndex;
             } else {
                 finalIndex = relY < rect.height / 2 ? dropIndex : dropIndex + 1;
@@ -1247,11 +1185,9 @@ function renderUploadedGrid() {
 
             STATE.files.splice(finalIndex, 0, movedItem);
 
-            // Update active index if moved
             if (STATE.activePageIdx === dragIndex) {
                 STATE.activePageIdx = finalIndex;
             } else {
-                // Check if active page was shifted
                 if (STATE.activePageIdx > dragIndex && STATE.activePageIdx <= finalIndex) {
                     STATE.activePageIdx--;
                 } else if (STATE.activePageIdx < dragIndex && STATE.activePageIdx >= finalIndex) {
@@ -1266,7 +1202,6 @@ function renderUploadedGrid() {
     });
     DOM.imageListContainer.appendChild(gridFragment);
 
-    // Re-create icons for new dynamic list markup
     if (typeof lucide !== 'undefined') {
         lucide.createIcons();
     }
@@ -1277,7 +1212,6 @@ function swapFiles(idxA, idxB) {
     STATE.files[idxA] = STATE.files[idxB];
     STATE.files[idxB] = temp;
 
-    // Follow the swapped index
     if (STATE.activePageIdx === idxA) {
         STATE.activePageIdx = idxB;
     } else if (STATE.activePageIdx === idxB) {
@@ -1288,29 +1222,26 @@ function swapFiles(idxA, idxB) {
 }
 
 function removeFile(index) {
-    STATE.files.splice(index, 1);
+    const removed = STATE.files.splice(index, 1)[0];
+    revokeFileObjectUrls(removed);
     if (STATE.activePageIdx >= STATE.files.length) {
         STATE.activePageIdx = Math.max(0, STATE.files.length - 1);
     }
     updateUIState();
 }
 
-// Generate the virtual PDF page mockup sheet dynamically
 function renderVirtualLayoutPreview() {
-    // Clear old sheet
     const oldSheet = DOM.virtualPreviewCanvas.querySelector('.virtual-pdf-sheet');
     if (oldSheet) oldSheet.remove();
 
     const activeFile = STATE.files[STATE.activePageIdx];
     if (!activeFile) return;
 
-    // Create the page sheet DOM structure
     const sheet = document.createElement('div');
     sheet.className = 'virtual-pdf-sheet';
 
-    // Calculate aspect ratio and dimensions for virtual preview
     let pageW = 1;
-    let pageH = 1.414; // Default standard aspect ratio
+    let pageH = 1.414;
 
     const usedPageSize = (activeFile.pageSizeOverride && activeFile.pageSizeOverride !== 'global') ? activeFile.pageSizeOverride : STATE.settings.pageSize;
     const usedMargin = (activeFile.marginOverride && activeFile.marginOverride !== 'global') ? activeFile.marginOverride : STATE.settings.margin;
@@ -1335,10 +1266,8 @@ function renderVirtualLayoutPreview() {
         }
     }
 
-    // Set standard style ratio
     sheet.style.aspectRatio = `${pageW} / ${pageH}`;
 
-    // Render margins guides
     let marginPercent = 0;
     if (usedMargin === 'thin') {
         marginPercent = 5;
@@ -1354,19 +1283,16 @@ function renderVirtualLayoutPreview() {
         sheet.appendChild(guide);
     }
 
-    // Setup interior elements
     const imgElement = document.createElement('img');
-    imgElement.src = activeFile.dataUrl;
+    imgElement.src = activeFile.previewUrl || activeFile.dataUrl;
     imgElement.className = 'virtual-sheet-image';
+    imgElement.decoding = 'async';
 
-    // Apply margins padding to the page sheet
     sheet.style.padding = `${marginPercent}%`;
 
-    // Add sizing alignments based on settings
     if (usedPageSize === 'original') {
         imgElement.style.objectFit = 'fill';
     } else {
-        // Presets layouts
         const fitting = STATE.settings.imageFitting;
 
         if (fitting === 'fit') {
@@ -1374,7 +1300,6 @@ function renderVirtualLayoutPreview() {
         } else if (fitting === 'fill') {
             imgElement.style.objectFit = 'cover';
         } else {
-            // stretch
             imgElement.style.objectFit = 'fill';
         }
     }
@@ -1382,7 +1307,6 @@ function renderVirtualLayoutPreview() {
     sheet.appendChild(imgElement);
     DOM.virtualPreviewCanvas.appendChild(sheet);
 
-    // Render pagination indicators
     if (STATE.files.length > 1) {
         DOM.previewPagination.style.display = 'flex';
         DOM.currentPreviewPage.textContent = STATE.activePageIdx + 1;
@@ -1416,9 +1340,8 @@ async function convertImagesToPDF() {
 
     try {
         const fingerprint = STATE.files.map(f => f.id).join(',');
-        const qFingerprint = STATE.files.map(f => f.quality || 90).join(',');
+        const qFingerprint = STATE.files.map(f => f.quality || 100).join(',');
 
-        // Check cache
         let compiledResult = null;
         const compiledCacheMatches = STATE.compiledCache &&
             STATE.compiledCache.pageSize === STATE.settings.pageSize &&
@@ -1441,11 +1364,12 @@ async function convertImagesToPDF() {
             compiledResult = await compilePDFDocument(async (curr, tot) => {
                 const percent = Math.round((curr / tot) * 100);
                 progressEl.textContent = `${percent}%`;
-                await delay(50);
+                if (curr % 4 === 0 || curr === tot) {
+                    await new Promise(resolve => requestAnimationFrame(resolve));
+                }
             });
         }
 
-        // Download
         if (STATE.settings.mergeMode === 'single') {
             compiledResult.doc.save('pictopdf_compiled.pdf');
         } else {
@@ -1469,17 +1393,20 @@ async function convertImagesToPDF() {
 }
 
 /* ==========================================================================
-   Image Extraction & ZIP Packing
+   Image Extraction & Saving
    ========================================================================== */
-
-// Download a single card image directly as a JPEG file
 async function downloadSingleImage(index) {
     const fileObj = STATE.files[index];
     if (!fileObj) return;
 
     try {
-        const quality = fileObj.quality || STATE.settings.imageQuality;
-        const processedImage = await processQualityRatio(fileObj.dataUrl, fileObj.type, quality);
+        const quality = fileObj.quality || 100;
+        const processedImage = await processQualityRatio(
+            fileObj.dataUrl,
+            fileObj.type,
+            quality,
+            fileObj.currentBytes || fileObj.originalBytes
+        );
 
         const cleanName = fileObj.name.replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').replace(/\s+/g, "_");
         const fileName = `${cleanName}_extracted.jpg`;
@@ -1496,19 +1423,21 @@ async function downloadSingleImage(index) {
     }
 }
 
-
-// Compile the PDF document exactly according to active settings
 async function compilePDFDocument(progressCallback, cancellationToken = null) {
     const count = STATE.files.length;
     if (count === 0) return null;
 
     if (STATE.settings.mergeMode === 'single') {
         let doc = null;
-        
-        // Start all image processing in parallel to utilize multiple cores/threads
+
         const processingPromises = STATE.files.map(imgData => {
-            const quality = imgData.quality || STATE.settings.imageQuality;
-            return processQualityRatio(imgData.dataUrl, imgData.type, quality);
+            const quality = imgData.quality || 100;
+            return processQualityRatio(
+                imgData.dataUrl,
+                imgData.type,
+                quality,
+                imgData.currentBytes || imgData.originalBytes
+            );
         });
 
         for (let i = 0; i < count; i++) {
@@ -1518,13 +1447,7 @@ async function compilePDFDocument(progressCallback, cancellationToken = null) {
             const imgData = STATE.files[i];
             const processedImage = await processingPromises[i];
 
-            // Calculate base64 length in bytes of the compressed stream
-            const base64Length = processedImage.url.length;
-            const headerIndex = processedImage.url.indexOf(',');
-            const dataLength = headerIndex !== -1 ? base64Length - headerIndex - 1 : base64Length;
-            const imageBytes = Math.round(dataLength * 0.75);
-
-            // Save exact individual size contribution inside state
+            const imageBytes = processedImage.byteSize || imgData.currentBytes || imgData.originalBytes;
             imgData.exactPdfSize = imageBytes + 1500;
             imgData.sizeFingerprint = getFileSizeFingerprint(imgData);
 
@@ -1582,10 +1505,14 @@ async function compilePDFDocument(progressCallback, cancellationToken = null) {
         const blobs = [];
         let totalSize = 0;
 
-        // Start all image processing in parallel to utilize multiple cores/threads
         const processingPromises = STATE.files.map(imgData => {
-            const quality = imgData.quality || STATE.settings.imageQuality;
-            return processQualityRatio(imgData.dataUrl, imgData.type, quality);
+            const quality = imgData.quality || 100;
+            return processQualityRatio(
+                imgData.dataUrl,
+                imgData.type,
+                quality,
+                imgData.currentBytes || imgData.originalBytes
+            );
         });
 
         for (let i = 0; i < count; i++) {
@@ -1638,7 +1565,6 @@ async function compilePDFDocument(progressCallback, cancellationToken = null) {
             const itemBlob = itemDoc.output('blob');
             totalSize += itemBlob.size;
 
-            // Save exact individual PDF blob size in state
             imgData.exactPdfSize = itemBlob.size;
             imgData.sizeFingerprint = getFileSizeFingerprint(imgData);
 
@@ -1651,99 +1577,26 @@ async function compilePDFDocument(progressCallback, cancellationToken = null) {
     }
 }
 
-// Helper to stamp watermark diagonally
 function applyWatermark(doc, pageConfig, text) {
-    doc.setTextColor(150, 150, 150); // Light gray
+    doc.setTextColor(150, 150, 150);
     doc.setFontSize(42);
-    // Add transparency via GState if jsPDF allows, otherwise rely on light color
     doc.text(text, pageConfig.pageW / 2, pageConfig.pageH / 2, {
         align: 'center',
         angle: 45
     });
 }
 
-// Compress client-side using bounded parallel OffscreenCanvas tasks.
+// Built-in client-side compression (only runs when user manually lowers a card's Quality slider < 100%)
 let activeCanvasTasks = 0;
 const canvasTaskWaiters = [];
 const qualityRatioCache = new Map();
-const imageWorkers = [];
-let workerQueueWaiters = [];
-const imageWorkerStats = {
-    poolSize: 0,
-    completed: 0,
-    fallback: 0,
-    lastBatchMs: 0
-};
-window.getImageWorkerStats = () => ({ ...imageWorkerStats });
 
-function getImageWorkerPoolSize() {
-    return Math.max(1, Math.min(16, navigator.hardwareConcurrency || 4));
-}
-
-function getAvailableImageWorker() {
-    if (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined') return null;
-    const activeWorkers = imageWorkers.filter(worker => !worker.failed);
-    if (activeWorkers.length < getImageWorkerPoolSize()) {
-        const worker = new Worker('image-worker.js?v=2');
-        worker.busy = false;
-        worker.failed = false;
-        imageWorkerStats.poolSize++;
-        worker.currentResolve = null;
-        worker.currentReject = null;
-        worker.onmessage = function (event) {
-            if (!worker.currentResolve) return;
-            const resolve = worker.currentResolve;
-            const reject = worker.currentReject;
-            worker.currentResolve = null;
-            worker.currentReject = null;
-            worker.busy = false;
-            const nextWaiter = workerQueueWaiters.shift();
-            if (nextWaiter) nextWaiter();
-
-            if (event.data.error) {
-                reject(new Error(event.data.error));
-            } else {
-                imageWorkerStats.completed++;
-                resolve(event.data);
-            }
-        };
-        worker.onerror = function (error) {
-            const reject = worker.currentReject;
-            worker.currentResolve = null;
-            worker.currentReject = null;
-            worker.busy = false;
-            worker.failed = true;
-            const nextWaiter = workerQueueWaiters.shift();
-            if (nextWaiter) nextWaiter();
-            if (reject) reject(error instanceof Error ? error : new Error('Image worker failed'));
-        };
-        imageWorkers.push(worker);
-        return worker;
-    }
-
-    return imageWorkers.find(worker => !worker.failed && !worker.busy) || null;
-}
-
-async function processImageInWorker(dataUrl, mimeType, quality) {
-    let worker = getAvailableImageWorker();
-    while (!worker) {
-        await new Promise(resolve => workerQueueWaiters.push(resolve));
-        worker = getAvailableImageWorker();
-    }
-
-    worker.busy = true;
-    const response = await fetch(dataUrl);
-    const blob = await response.blob();
-
-    return new Promise((resolve, reject) => {
-        worker.currentResolve = resolve;
-        worker.currentReject = reject;
-        worker.postMessage({ blob, mimeType, quality });
-    });
+function getCanvasConcurrency() {
+    return Math.max(1, Math.min(4, navigator.hardwareConcurrency || 4));
 }
 
 async function runCanvasTask(task) {
-    const concurrency = getImageWorkerPoolSize();
+    const concurrency = getCanvasConcurrency();
 
     activeCanvasTasks++;
     if (activeCanvasTasks > concurrency) {
@@ -1759,7 +1612,19 @@ async function runCanvasTask(task) {
     }
 }
 
-async function processQualityRatio(dataUrl, mimeType, quality) {
+async function processQualityRatio(dataUrl, mimeType, quality, knownByteSize = null) {
+    // Instant zero-overhead fast path for 100% Original Quality
+    if (quality === 100 || mimeType === 'image/svg+xml') {
+        const format = (mimeType && mimeType.includes('png')) ? 'PNG' : 'JPEG';
+        let byteSize = knownByteSize;
+        if (byteSize === null) {
+            const headerIndex = dataUrl.indexOf(',');
+            const dataLength = headerIndex !== -1 ? dataUrl.length - headerIndex - 1 : dataUrl.length;
+            byteSize = Math.round(dataLength * 0.75);
+        }
+        return { url: dataUrl, format, byteSize };
+    }
+
     let qualityCache = qualityRatioCache.get(dataUrl);
     if (!qualityCache) {
         qualityCache = new Map();
@@ -1774,38 +1639,13 @@ async function processQualityRatio(dataUrl, mimeType, quality) {
     }
 
     const processingPromise = runCanvasTask(async () => {
-        // No compression for full lossless representations or vector formats
-        if (quality === 100 || mimeType === 'image/svg+xml') {
-            const format = mimeType.includes('png') ? 'PNG' : 'JPEG';
-            const base64Length = (dataUrl.split(',')[1] || '').length;
-            return { url: dataUrl, format, byteSize: Math.round(base64Length * 0.75) };
-        }
-
-        try {
-            const workerResult = await processImageInWorker(dataUrl, mimeType, quality);
-            if (!workerResult.error && workerResult.compressedBlob) {
-                const url = await new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onload = () => resolve(reader.result);
-                    reader.onerror = reject;
-                    reader.readAsDataURL(workerResult.compressedBlob);
-                });
-                return { url, format: 'JPEG', byteSize: workerResult.compressedBlob.size };
-            }
-            if (workerResult.error) imageWorkerStats.fallback++;
-        } catch (workerError) {
-            imageWorkerStats.fallback++;
-            console.warn('Worker image processing failed; using main-thread fallback:', workerError);
-        }
-
-        if (typeof createImageBitmap === 'function') {
-            const response = await fetch(dataUrl);
-            const blob = await response.blob();
-            const bitmap = await createImageBitmap(blob);
-
-            if (typeof OffscreenCanvas !== 'undefined') {
+        if (typeof createImageBitmap === 'function' && typeof OffscreenCanvas !== 'undefined') {
+            try {
+                const response = await fetch(dataUrl);
+                const blob = await response.blob();
+                const bitmap = await createImageBitmap(blob);
                 const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-                const ctx = canvas.getContext('2d');
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
                 ctx.drawImage(bitmap, 0, 0);
                 bitmap.close();
                 const jpegBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: quality / 100 });
@@ -1816,9 +1656,7 @@ async function processQualityRatio(dataUrl, mimeType, quality) {
                     reader.readAsDataURL(jpegBlob);
                 });
                 return { url, format: 'JPEG', byteSize: jpegBlob.size };
-            }
-
-            bitmap.close();
+            } catch (_) {}
         }
 
         return new Promise((resolve, reject) => {
@@ -1827,18 +1665,20 @@ async function processQualityRatio(dataUrl, mimeType, quality) {
                 const canvas = document.createElement('canvas');
                 canvas.width = img.width;
                 canvas.height = img.height;
-                const ctx = canvas.getContext('2d');
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
                 ctx.drawImage(img, 0, 0);
                 const compressedUrl = canvas.toDataURL('image/jpeg', quality / 100);
                 canvas.width = 0;
                 canvas.height = 0;
-                const dataLength = (compressedUrl.split(',')[1] || '').length;
+                const headerIdx = compressedUrl.indexOf(',');
+                const dataLength = headerIdx !== -1 ? compressedUrl.length - headerIdx - 1 : compressedUrl.length;
                 resolve({ url: compressedUrl, format: 'JPEG', byteSize: Math.round(dataLength * 0.75) });
             };
             img.onerror = reject;
             img.src = dataUrl;
         });
     });
+
     qualityCache.set(cacheKey, processingPromise);
     if (qualityCache.size > 6) {
         qualityCache.delete(qualityCache.keys().next().value);
@@ -1846,14 +1686,12 @@ async function processQualityRatio(dataUrl, mimeType, quality) {
     return processingPromise;
 }
 
-// Coordinate calculation systems (Original / Margins / Alignment fitting)
 function getPageDimensionsAndImageBounds(imgW, imgH, pageSize, orientation, marginType, imageFitting) {
     let pageW = 0;
     let pageH = 0;
 
-    // Page Size Selection
     if (pageSize === 'original') {
-        pageW = imgW * 0.75; // Convert image px to pt (assuming 96 dpi: 1 px = 0.75 pt)
+        pageW = imgW * 0.75;
         pageH = imgH * 0.75;
 
         const margin = MARGIN_SIZES[marginType] || 0;
@@ -1882,7 +1720,6 @@ function getPageDimensionsAndImageBounds(imgW, imgH, pageSize, orientation, marg
         }
     }
 
-    // Predefined Paper selection sizing (A4, Letter, legal...)
     const preset = PAGE_PRESETS[pageSize];
     let orient = orientation;
 
@@ -1898,10 +1735,7 @@ function getPageDimensionsAndImageBounds(imgW, imgH, pageSize, orientation, marg
         pageH = preset.width;
     }
 
-    // Margin size calculations
     const margin = MARGIN_SIZES[marginType];
-
-    // Printable Dimensions inside margin layout bounds
     const printableW = pageW - (margin * 2);
     const printableH = pageH - (margin * 2);
 
@@ -1913,35 +1747,27 @@ function getPageDimensionsAndImageBounds(imgW, imgH, pageSize, orientation, marg
     const pageRatio = printableW / printableH;
     const imgRatio = imgW / imgH;
 
-    // Alignment / Aspect scaling strategy formulas
     if (imageFitting === 'fit') {
-        // Centering and fitting maintaining original bounds
         if (imgRatio > pageRatio) {
-            // Image is wider than page ratio
             drawW = printableW;
             drawH = printableW / imgRatio;
             imgY = margin + (printableH - drawH) / 2;
         } else {
-            // Image is taller than page ratio
             drawH = printableH;
             drawW = printableH * imgRatio;
             imgX = margin + (printableW - drawW) / 2;
         }
     } else if (imageFitting === 'fill') {
-        // Fills printable canvas box, cropping overlapping bounds. 
         if (imgRatio > pageRatio) {
-            // Image is wider than page ratio - scale height to printable, overflow width
             drawH = printableH;
             drawW = printableH * imgRatio;
             imgX = margin + (printableW - drawW) / 2;
         } else {
-            // Image is taller than page ratio - scale width to printable, overflow height
             drawW = printableW;
             drawH = printableW / imgRatio;
             imgY = margin + (printableH - drawH) / 2;
         }
     } else {
-        // stretch: matches printable width and height exactly, ignoring aspect ratios
         drawW = printableW;
         drawH = printableH;
     }
@@ -1956,19 +1782,15 @@ function getPageDimensionsAndImageBounds(imgW, imgH, pageSize, orientation, marg
     };
 }
 
-// Utility delay timer
 function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
-
-// Recalculate estimated PDF size based on selected quality and files in queue
 
 function getFileSizeFingerprint(fileObj) {
     return [
         fileObj.id,
         fileObj.editCount || 0,
-        fileObj.quality || 90,
-        STATE.settings.imageQuality,
+        fileObj.quality || 100,
         STATE.settings.pageSize,
         STATE.settings.orientation,
         STATE.settings.margin,
@@ -1994,8 +1816,7 @@ function scheduleSizeBadgeUpdates() {
 }
 
 async function processStaleIndexesInBatches(indexes, generation) {
-    const batchSize = getImageWorkerPoolSize();
-    const startedAt = performance.now();
+    const batchSize = getCanvasConcurrency();
     for (let start = 0; start < indexes.length; start += batchSize) {
         if (generation !== imageEstimateGeneration) return;
         const batch = indexes.slice(start, start + batchSize);
@@ -2004,15 +1825,18 @@ async function processStaleIndexesInBatches(indexes, generation) {
         ));
         await new Promise(resolve => requestAnimationFrame(resolve));
     }
-    imageWorkerStats.lastBatchMs = Math.round(performance.now() - startedAt);
-    console.info(`[Image workers] pool=${getImageWorkerPoolSize()}, images=${indexes.length}, batch=${imageWorkerStats.lastBatchMs}ms`);
     scheduleSizeBadgeUpdates();
 }
 
 async function calculateSingleImagePdfSize(fileObj, index, generation) {
-    if (generation !== imageEstimateGeneration) return;
-    const quality = fileObj.quality || STATE.settings.imageQuality;
-    const processedImage = await processQualityRatio(fileObj.dataUrl, fileObj.type, quality);
+    if (!fileObj || generation !== imageEstimateGeneration) return;
+    const quality = fileObj.quality || 100;
+    const processedImage = await processQualityRatio(
+        fileObj.dataUrl,
+        fileObj.type,
+        quality,
+        fileObj.currentBytes || fileObj.originalBytes
+    );
     if (generation !== imageEstimateGeneration) return;
     const fingerprint = getFileSizeFingerprint(fileObj);
     const exactSize = (processedImage.byteSize || 0) + 1500;
@@ -2055,67 +1879,37 @@ function recalculateEstimatedPDFSize(targetIndex = null) {
         DOM.sizeIndicatorGroup.style.display = 'flex';
     }
 
-    // Check if we already have the exact size calculated for these precise settings
-    const fingerprint = STATE.files.map(f => f.id + '-' + (f.editCount || 0)).join(',');
-    const qFingerprint = STATE.files.map(f => f.quality || 90).join(',');
+    const staleIndexes = [];
 
-    const compiledCacheMatches = STATE.compiledCache &&
-        STATE.compiledCache.pageSize === STATE.settings.pageSize &&
-        STATE.compiledCache.orientation === STATE.settings.orientation &&
-        STATE.compiledCache.margin === STATE.settings.margin &&
-        STATE.compiledCache.imageFitting === STATE.settings.imageFitting &&
-        STATE.compiledCache.mergeMode === STATE.settings.mergeMode &&
-        STATE.compiledCache.filesLength === STATE.files.length &&
-        STATE.compiledCache.filesFingerprint === fingerprint &&
-        STATE.compiledCache.qualitiesFingerprint === qFingerprint &&
-        STATE.compiledCache.enablePassword === STATE.settings.enablePassword &&
-        STATE.compiledCache.pdfPassword === STATE.settings.pdfPassword &&
-        STATE.compiledCache.watermarkText === STATE.settings.watermarkText;
-    const individualSizesAreCurrent = STATE.files.every(fileObj =>
-        Boolean(fileObj.exactPdfSize) &&
-        fileObj.sizeFingerprint === getFileSizeFingerprint(fileObj)
-    );
+    STATE.files.forEach((fileObj, index) => {
+        if (targetIndex !== null && index !== targetIndex) return;
 
-    if (compiledCacheMatches && individualSizesAreCurrent) {
-
-        // Cache hit! Skip background processing completely
-        if (DOM.estimatedPdfSize) {
-            const label = STATE.settings.mergeMode === 'separate' ? 'Batch Total' : 'Size';
-            updateSizeBadge(DOM.estimatedPdfSize, label, STATE.compiledCache.data.size);
+        const fingerprint = getFileSizeFingerprint(fileObj);
+        if (fileObj.sizeFingerprint === fingerprint && fileObj.exactPdfSize) {
+            return;
         }
 
-        updateIndividualSizeBadges();
-        return; // STOP execution. Do not start timeout or background compiler.
-    }
-
-    // Clear only stale individual sizes. Unchanged cards keep their exact cached values.
-    const staleIndexes = STATE.files.map((fileObj, index) => {
-        const fingerprint = getFileSizeFingerprint(fileObj);
-        const isStale = fileObj.sizeFingerprint !== fingerprint;
-        return targetIndex === null || index === targetIndex
-            ? (isStale ? index : -1)
-            : -1;
-    }).filter(index => index >= 0);
-
-    staleIndexes.forEach(index => {
-        STATE.files[index].exactPdfSize = null;
+        const quality = fileObj.quality || 100;
+        if (quality === 100 || fileObj.type === 'image/svg+xml') {
+            const bytes = fileObj.currentBytes || fileObj.originalBytes || 0;
+            fileObj.exactPdfSize = bytes + 1500;
+            fileObj.sizeFingerprint = fingerprint;
+        } else {
+            fileObj.exactPdfSize = null;
+            staleIndexes.push(index);
+        }
     });
 
     updateIndividualSizeBadges();
     updateEstimatedTotalFromIndividualSizes();
 
-    // Process large queues in bounded batches to prevent worker/input-buffer pressure.
-    imageEstimateGeneration++;
-    processStaleIndexesInBatches(staleIndexes, imageEstimateGeneration)
-        .catch(error => console.warn('Failed to calculate individual image size:', error));
-
-    if (targetIndex !== null) {
-        return;
+    if (staleIndexes.length > 0) {
+        imageEstimateGeneration++;
+        processStaleIndexesInBatches(staleIndexes, imageEstimateGeneration)
+            .catch(error => console.warn('Failed to calculate individual image size:', error));
     }
-    return;
 }
 
-// Update individual list card badge text content instantly
 function updateIndividualSizeBadges() {
     const badges = DOM.imageListContainer.querySelectorAll('.individual-pdf-size-badge');
     badges.forEach(badge => {
@@ -2146,7 +1940,7 @@ let editState = {
     filters: { brightness: 100, contrast: 100, grayscale: 0, sepia: 0 },
     pageSizeOverride: 'global',
     marginOverride: 'global',
-    tempDataUrl: null, // holds the image with rotation/filters applied before cropping
+    tempDataUrl: null,
     perspectiveMode: false,
     perspectiveDraggingNode: null,
     perspectivePoints: [
@@ -2171,7 +1965,6 @@ function openEditInterface(index) {
     editState.perspectiveMode = false;
     DOM.togglePerspective.checked = false;
 
-    // Load existing local settings or defaults
     editState.rotation = fileObj.rotation || 0;
     editState.filters = fileObj.filters ? { ...fileObj.filters } : { brightness: 100, contrast: 100, grayscale: 0, sepia: 0 };
     editState.pageSizeOverride = fileObj.pageSizeOverride || 'global';
@@ -2181,7 +1974,6 @@ function openEditInterface(index) {
     if (editSidebar) editSidebar.classList.add('controls-open');
     DOM.editModal.classList.add('controls-open');
 
-    // Set UI elements
     DOM.cropAspectRatio.value = 'free';
     DOM.overridePageSize.value = editState.pageSizeOverride;
     DOM.overrideMargin.value = editState.marginOverride;
@@ -2193,19 +1985,16 @@ function openEditInterface(index) {
 
     updateFilterBadges();
 
-    // Prevent background home page from scrolling while modal is open
     document.body.style.overflow = 'hidden';
     document.documentElement.style.overflow = 'hidden';
 
     DOM.editModal.style.display = 'flex';
 
-    // Reset tabs
     document.querySelectorAll('.edit-tab-btn').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.edit-panel').forEach(p => p.classList.remove('active'));
     document.querySelector('[data-tab="tab-crop"]').classList.add('active');
     document.getElementById('tab-crop').classList.add('active');
 
-    // Generate the preview image (bakes in filters and rotation to a temp canvas)
     updateEditPreview(true);
 }
 
@@ -2236,7 +2025,7 @@ function updateEditPreview(resetCropBox = false) {
                 if (generation !== editPreviewGeneration) return;
 
                 const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
                 let cw = img.width;
                 let ch = img.height;
@@ -2245,8 +2034,6 @@ function updateEditPreview(resetCropBox = false) {
                     ch = img.width;
                 }
 
-                // Preview resolution is intentionally capped. Filters/crop interaction
-                // must not process the full multi-megapixel image on every input event.
                 const previewScale = Math.min(1, 1600 / Math.max(cw, ch));
                 cw = Math.max(1, Math.round(cw * previewScale));
                 ch = Math.max(1, Math.round(ch * previewScale));
@@ -2296,7 +2083,7 @@ function updateEditPreview(resetCropBox = false) {
                     DOM.cropSourceImage.src = previewUrl;
                 }, fileObj.type === 'image/png' ? 'image/png' : 'image/jpeg', 0.82);
             };
-            img.src = fileObj.originalDataUrl;
+            img.src = fileObj.originalPreviewUrl || fileObj.originalDataUrl;
         }, 50);
     });
 }
@@ -2321,7 +2108,6 @@ function updatePerspectiveUI() {
     }
 }
 
-// Bind Edit Event Listeners
 document.addEventListener('DOMContentLoaded', () => {
     initEditEvents();
 });
@@ -2329,7 +2115,6 @@ document.addEventListener('DOMContentLoaded', () => {
 function initEditEvents() {
     if (!DOM.cropBox) return;
 
-    // Toggle Perspective Mode
     if (DOM.togglePerspective) {
         DOM.togglePerspective.addEventListener('change', (e) => {
             editState.perspectiveMode = e.target.checked;
@@ -2337,13 +2122,10 @@ function initEditEvents() {
         });
     }
 
-    // Tabs switching
     document.querySelectorAll('.edit-tab-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             const target = e.currentTarget;
             const sidebar = DOM.editModal.querySelector('.edit-sidebar');
-            const wasActive = target.classList.contains('active');
-            const isOpen = sidebar ? sidebar.classList.contains('controls-open') : false;
 
             document.querySelectorAll('.edit-tab-btn').forEach(b => b.classList.remove('active'));
             document.querySelectorAll('.edit-panel').forEach(p => p.classList.remove('active'));
@@ -2359,11 +2141,9 @@ function initEditEvents() {
         });
     });
 
-    // Tools
     DOM.btnRotateLeft.addEventListener('click', () => { editState.rotation = (editState.rotation - 90) % 360; updateEditPreview(true); });
     DOM.btnRotateRight.addEventListener('click', () => { editState.rotation = (editState.rotation + 90) % 360; updateEditPreview(true); });
 
-    // Filters (live preview using input)
     let filterPreviewTimer = null;
     const applyFilters = (resetCrop = false) => {
         editState.filters.brightness = parseInt(DOM.filterBrightness.value);
@@ -2391,11 +2171,9 @@ function initEditEvents() {
         applyFilters(false);
     });
 
-    // Layout
     DOM.overridePageSize.addEventListener('change', (e) => { editState.pageSizeOverride = e.target.value; });
     DOM.overrideMargin.addEventListener('change', (e) => { editState.marginOverride = e.target.value; });
 
-    // 1. Close actions
     DOM.closeEditModal.addEventListener('click', closeEditInterface);
     DOM.btnCancelEdit.addEventListener('click', closeEditInterface);
 
@@ -2414,7 +2192,6 @@ function initEditEvents() {
         mobileSaveEdit.addEventListener('click', applyImageEdits);
     }
 
-    // Fullscreen toggle
     const toggleFullscreenFunc = () => {
         const mainArea = DOM.editModal.querySelector('.edit-main-area');
         const isEntering = !DOM.editModal.classList.contains('fullscreen-mode');
@@ -2432,7 +2209,6 @@ function initEditEvents() {
             }
         }
 
-        // Allow layout to adapt, then sync workspace and crop box to the resized image
         setTimeout(() => {
             if (!DOM.cropSourceImage || editState.index === -1) return;
             const displayedW = DOM.cropSourceImage.clientWidth;
@@ -2466,7 +2242,6 @@ function initEditEvents() {
         });
     }
 
-    // Escape key listener to exit full view or close modal
     window.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && DOM.editModal && DOM.editModal.style.display !== 'none') {
             if (DOM.editModal.classList.contains('fullscreen-mode')) {
@@ -2477,19 +2252,16 @@ function initEditEvents() {
         }
     });
 
-    // Close on click outside
     DOM.editModal.addEventListener('mousedown', (e) => {
         if (e.target === DOM.editModal) {
             closeEditInterface();
         }
     });
 
-    // 2. Dragging box moves
     DOM.cropBox.addEventListener('pointerdown', (e) => {
         if (e.target.classList.contains('crop-handle')) return;
         e.preventDefault();
 
-        // Release any existing state
         endEditPointer();
 
         editState.dragging = true;
@@ -2497,19 +2269,17 @@ function initEditEvents() {
         editState.startY = e.clientY;
         editState.startLeft = parseInt(DOM.cropBox.style.left) || 0;
         editState.startTop = parseInt(DOM.cropBox.style.top) || 0;
-        
+
         DOM.cropBox.setPointerCapture(e.pointerId);
     });
 
-    // 3. Resizing handles (all 4 corners)
     const cHandles = DOM.cropBox.querySelectorAll('.crop-handle');
     cHandles.forEach(handle => {
         const startCropDrag = (e, clientX, clientY) => {
             e.stopPropagation(); e.preventDefault();
             endEditPointer();
-            
+
             editState.resizing = true;
-            // Determine which corner this is based on its class
             if (handle.classList.contains('tl')) editState.resizeNode = 'tl';
             else if (handle.classList.contains('tr')) editState.resizeNode = 'tr';
             else if (handle.classList.contains('bl')) editState.resizeNode = 'bl';
@@ -2525,13 +2295,12 @@ function initEditEvents() {
             editState.startHeight = parseInt(DOM.cropBox.style.height) || 100;
             editState.startLeft = parseInt(DOM.cropBox.style.left) || 0;
             editState.startTop = parseInt(DOM.cropBox.style.top) || 0;
-            
+
             handle.setPointerCapture(e.pointerId);
         };
         handle.addEventListener('pointerdown', (e) => startCropDrag(e, e.clientX, e.clientY));
     });
 
-    // 3.5 Perspective Handles
     const pHandles = [DOM.phTl, DOM.phTr, DOM.phBr, DOM.phBl];
     pHandles.forEach((handle, idx) => {
         if (!handle) return;
@@ -2550,7 +2319,6 @@ function initEditEvents() {
         });
     });
 
-    // 4. Mouse movement tracking
     let editPointerFrame = null;
     let latestEditPointerEvent = null;
     window.addEventListener('pointermove', (e) => {
@@ -2569,17 +2337,14 @@ function initEditEvents() {
         }
     }, { passive: false });
 
-    // 5. Mouse release tracking
     window.addEventListener('pointerup', endEditPointer);
     window.addEventListener('pointercancel', endEditPointer);
 
-    // 6. Aspect Ratio changes
     DOM.cropAspectRatio.addEventListener('change', (e) => {
         editState.aspectRatio = e.target.value;
         applyCropAspectRatio();
     });
 
-    // 7. Apply Edit Action
     DOM.btnApplyEdit.addEventListener('click', applyImageEdits);
 }
 
@@ -2653,7 +2418,6 @@ function handlePointerMove(e) {
             newH = 30;
         }
 
-        // Bounds checking
         if (newL < 0) { newW += newL; newL = 0; }
         if (newT < 0) { newH += newT; newT = 0; }
         if (newL + newW > displayedW) newW = displayedW - newL;
@@ -2664,8 +2428,7 @@ function handlePointerMove(e) {
             const ratio = ratioParts[0] / ratioParts[1];
 
             newH = newW / ratio;
-            
-            // If dragging a top handle, we must adjust newT so the bottom edge stays fixed
+
             if (editState.resizeNode.includes('t')) {
                 newT = editState.startTop + (editState.startHeight - newH);
             }
@@ -2677,9 +2440,9 @@ function handlePointerMove(e) {
                     newL = editState.startLeft + (editState.startWidth - newW);
                 }
             }
-            
+
             if (newT < 0) {
-                newH = newH + newT; // newT is negative, so this shrinks newH
+                newH = newH + newT;
                 newT = 0;
                 newW = newH * ratio;
                 if (editState.resizeNode.includes('l')) {
@@ -2728,7 +2491,6 @@ function closeEditInterface() {
             if (typeof lucide !== 'undefined') lucide.createIcons();
         }
     }
-    // Restore home page scrolling
     document.body.style.overflow = '';
     document.documentElement.style.overflow = '';
     editState.index = -1;
@@ -2776,10 +2538,8 @@ function getPerspectiveTransform(pts) {
 }
 
 function applyPerspectiveWarp(srcImg, pts, scaleX, scaleY) {
-    // 1. Scale points to native resolution
     const scaledPts = pts.map(p => ({ x: p.x * scaleX, y: p.y * scaleY }));
 
-    // 2. Estimate output bounding box size (average of top/bottom widths and left/right heights)
     const wTop = Math.hypot(scaledPts[1].x - scaledPts[0].x, scaledPts[1].y - scaledPts[0].y);
     const wBot = Math.hypot(scaledPts[2].x - scaledPts[3].x, scaledPts[2].y - scaledPts[3].y);
     const hLeft = Math.hypot(scaledPts[3].x - scaledPts[0].x, scaledPts[3].y - scaledPts[0].y);
@@ -2787,26 +2547,22 @@ function applyPerspectiveWarp(srcImg, pts, scaleX, scaleY) {
     const outW = Math.round((wTop + wBot) / 2);
     const outH = Math.round((hLeft + hRight) / 2);
 
-    // 3. Draw source image to offscreen canvas to get ImageData
     const srcCanvas = document.createElement('canvas');
     srcCanvas.width = srcImg.width;
     srcCanvas.height = srcImg.height;
-    const srcCtx = srcCanvas.getContext('2d');
+    const srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true });
     srcCtx.drawImage(srcImg, 0, 0);
     const srcData = srcCtx.getImageData(0, 0, srcImg.width, srcImg.height).data;
 
-    // 4. Prepare output canvas
     const outCanvas = document.createElement('canvas');
     outCanvas.width = outW;
     outCanvas.height = outH;
-    const outCtx = outCanvas.getContext('2d');
+    const outCtx = outCanvas.getContext('2d', { willReadFrequently: true });
     const outImgData = outCtx.createImageData(outW, outH);
     const outData = outImgData.data;
 
-    // 5. Get transformation matrix (from output unit square to input quad)
     const H = getPerspectiveTransform(scaledPts);
 
-    // 6. Raycast pixels
     const srcW = srcImg.width;
     const srcH = srcImg.height;
     for (let r = 0; r < outH; r++) {
@@ -2814,7 +2570,6 @@ function applyPerspectiveWarp(srcImg, pts, scaleX, scaleY) {
         for (let c = 0; c < outW; c++) {
             const u = c / outW;
 
-            // Apply homography
             const w = H[6] * u + H[7] * v + H[8];
             const x = (H[0] * u + H[1] * v + H[2]) / w;
             const y = (H[3] * u + H[4] * v + H[5]) / w;
@@ -2825,12 +2580,12 @@ function applyPerspectiveWarp(srcImg, pts, scaleX, scaleY) {
             const outIdx = (r * outW + c) * 4;
             if (px >= 0 && px < srcW && py >= 0 && py < srcH) {
                 const srcIdx = (py * srcW + px) * 4;
-                outData[outIdx] = srcData[srcIdx];         // R
-                outData[outIdx + 1] = srcData[srcIdx + 1];     // G
-                outData[outIdx + 2] = srcData[srcIdx + 2];     // B
-                outData[outIdx + 3] = srcData[srcIdx + 3];     // A
+                outData[outIdx] = srcData[srcIdx];
+                outData[outIdx + 1] = srcData[srcIdx + 1];
+                outData[outIdx + 2] = srcData[srcIdx + 2];
+                outData[outIdx + 3] = srcData[srcIdx + 3];
             } else {
-                outData[outIdx + 3] = 0; // Transparent
+                outData[outIdx + 3] = 0;
             }
         }
     }
@@ -2857,7 +2612,7 @@ async function applyImageEdits() {
             const source = new Image();
             source.onload = () => resolve(source);
             source.onerror = () => reject(new Error('Could not load image for editing'));
-            source.src = fileObj.originalDataUrl;
+            source.src = fileObj.originalPreviewUrl || fileObj.originalDataUrl;
         });
 
         let bakedW = img.width;
@@ -2870,7 +2625,7 @@ async function applyImageEdits() {
         const bakedCanvas = document.createElement('canvas');
         bakedCanvas.width = bakedW;
         bakedCanvas.height = bakedH;
-        const bakedCtx = bakedCanvas.getContext('2d');
+        const bakedCtx = bakedCanvas.getContext('2d', { willReadFrequently: true });
         bakedCtx.filter = `brightness(${editState.filters.brightness}%) contrast(${editState.filters.contrast}%) grayscale(${editState.filters.grayscale}%) sepia(${editState.filters.sepia}%)`;
         bakedCtx.translate(bakedW / 2, bakedH / 2);
         bakedCtx.rotate(editState.rotation * Math.PI / 180);
@@ -2897,7 +2652,7 @@ async function applyImageEdits() {
             finalCanvas = document.createElement('canvas');
             finalCanvas.width = finalW;
             finalCanvas.height = finalH;
-            finalCanvas.getContext('2d').drawImage(
+            finalCanvas.getContext('2d', { willReadFrequently: true }).drawImage(
                 bakedCanvas, cropX, cropY, finalW, finalH, 0, 0, finalW, finalH
             );
         }
@@ -2922,7 +2677,13 @@ async function applyImageEdits() {
         finalCanvas.width = 0;
         finalCanvas.height = 0;
 
+        if (fileObj.previewUrl && fileObj.previewUrl.startsWith('blob:') && fileObj.previewUrl !== fileObj.originalPreviewUrl) {
+            URL.revokeObjectURL(fileObj.previewUrl);
+        }
+
         fileObj.dataUrl = croppedDataUrl;
+        fileObj.previewUrl = URL.createObjectURL(outputBlob);
+        fileObj.currentBytes = outputBlob.size;
         fileObj.width = finalW;
         fileObj.height = finalH;
         fileObj.sizeText = formatFileSize(outputBlob.size);
@@ -2942,51 +2703,52 @@ async function applyImageEdits() {
     }
 }
 
-// Revert all edits
 function resetEdits(index) {
     const fileObj = STATE.files[index];
     if (!fileObj) return;
 
     const img = new Image();
     img.onload = function () {
+        if (fileObj.previewUrl && fileObj.previewUrl.startsWith('blob:') && fileObj.previewUrl !== fileObj.originalPreviewUrl) {
+            URL.revokeObjectURL(fileObj.previewUrl);
+        }
         fileObj.dataUrl = fileObj.originalDataUrl;
+        fileObj.previewUrl = fileObj.originalPreviewUrl || fileObj.originalDataUrl;
+        fileObj.currentBytes = fileObj.originalBytes;
         fileObj.width = img.width;
         fileObj.height = img.height;
 
-        // Remove override keys
         delete fileObj.rotation;
         delete fileObj.filters;
         delete fileObj.pageSizeOverride;
         delete fileObj.marginOverride;
 
-        const base64Length = fileObj.originalDataUrl.length;
-        const headerIndex = fileObj.originalDataUrl.indexOf(',');
-        const dataLength = headerIndex !== -1 ? base64Length - headerIndex - 1 : base64Length;
-        const imageBytes = Math.round(dataLength * 0.75);
-
-        fileObj.sizeText = formatFileSize(imageBytes);
+        fileObj.sizeText = formatFileSize(fileObj.originalBytes);
 
         updateUIState();
         recalculateEstimatedPDFSize(index);
     };
-    img.src = fileObj.originalDataUrl;
+    img.src = fileObj.originalPreviewUrl || fileObj.originalDataUrl;
 }
 
-// Download just one image as a PDF
 async function downloadSinglePDF(index) {
     const fileObj = STATE.files[index];
     if (!fileObj) return;
 
-    // Show loading on the button
-    const btn = document.querySelectorAll('.btn-crop-node')[index * 3 + 1]; // Approximate, just for UI feedback
+    const btn = document.querySelectorAll('.btn-crop-node')[index * 3 + 1];
     if (btn) btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Saving...';
     if (typeof lucide !== 'undefined') {
         lucide.createIcons();
     }
 
     try {
-        const quality = fileObj.quality || STATE.settings.imageQuality;
-        const processedImage = await processQualityRatio(fileObj.dataUrl, fileObj.type, quality);
+        const quality = fileObj.quality || 100;
+        const processedImage = await processQualityRatio(
+            fileObj.dataUrl,
+            fileObj.type,
+            quality,
+            fileObj.currentBytes || fileObj.originalBytes
+        );
 
         const usedPageSize = (fileObj.pageSizeOverride && fileObj.pageSizeOverride !== 'global') ? fileObj.pageSizeOverride : STATE.settings.pageSize;
         const usedMargin = (fileObj.marginOverride && fileObj.marginOverride !== 'global') ? fileObj.marginOverride : STATE.settings.margin;
@@ -3016,7 +2778,7 @@ async function downloadSinglePDF(index) {
         );
 
         const originalName = fileObj.name.split('.')[0];
-        doc.save(`${originalName}_LuminaPDF.pdf`);
+        doc.save(`${originalName}_PicToPDF.pdf`);
     } catch (err) {
         console.error("Failed to generate single PDF", err);
         alert("Failed to generate PDF for this image.");
