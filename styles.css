@@ -3337,3 +3337,19 @@ body {
         font-size: 0.68rem !important;
     }
 }
+/* ==========================================================================
+   Hardware Layer Isolation
+   ========================================================================== */
+#btnConvert {
+    transform: translateZ(0);
+    will-change: auto;
+}
+
+#btnConvert:disabled {
+    box-shadow: none !important;
+    filter: none !important;
+}
+
+#btnConvert:disabled .spinner {
+    will-change: transform;
+}

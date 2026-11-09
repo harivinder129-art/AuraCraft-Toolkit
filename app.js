@@ -694,7 +694,134 @@ async function processPdfFile(file) {
     }
 }
 
-// Parse uploaded assets (Images, HEIC, and PDFs) with 0% GPU overhead and single-pass WASM
+// Fast <1ms binary JPEG header parser (reads width/height without decoding the full image)
+async function getFastImageDimensions(blob, previewUrl) {
+    if (blob && (blob.type === 'image/jpeg' || blob.type === 'image/jpg')) {
+        try {
+            const slice = blob.slice(0, 65536);
+            const buffer = await slice.arrayBuffer();
+            const view = new DataView(buffer);
+            if (view.byteLength >= 4 && view.getUint16(0, false) === 0xFFD8) {
+                let offset = 2;
+                while (offset + 9 < view.byteLength) {
+                    if (view.getUint8(offset) !== 0xFF) break;
+                    const marker = view.getUint8(offset + 1);
+                    if (marker === 0xFF) {
+                        offset++;
+                        continue;
+                    }
+                    if (marker === 0xC0 || marker === 0xC1 || marker === 0xC2) {
+                        const height = view.getUint16(offset + 5, false);
+                        const width = view.getUint16(offset + 7, false);
+                        if (width > 0 && height > 0) {
+                            return { width, height };
+                        }
+                        break;
+                    }
+                    const segLength = view.getUint16(offset + 2, false);
+                    if (segLength < 2) break;
+                    offset += 2 + segLength;
+                }
+            }
+        } catch (_) { }
+    }
+
+    return new Promise((resolve) => {
+        const img = new Image();
+        img.decoding = 'async';
+        img.onload = () => resolve({
+            width: img.naturalWidth || img.width,
+            height: img.naturalHeight || img.height
+        });
+        img.onerror = () => resolve(null);
+        img.src = previewUrl;
+    });
+}
+
+// Optimized Modern Image Processing Pipeline (heic-to worker architecture)
+async function processSingleImageFile(file) {
+    let fileToProcess = file;
+    let resolvedType = file.type;
+    const ext = file.name ? file.name.split('.').pop().toLowerCase() : '';
+    const isHeic = ext === 'heic' || ext === 'heif' || (resolvedType && (resolvedType.includes('heic') || resolvedType.includes('heif')));
+
+    if (isHeic) {
+        const heicToFn = window.HeicTo?.heicTo || window.HeicTo || window.heicTo;
+        if (!heicToFn) {
+            alert("HEIC Conversion Failed: The transcoding library (heic-to.js) failed to load.");
+            throw new Error("HEIC transcoder library is not loaded.");
+        }
+
+        try {
+            // Direct async worker decode stream with zero main-thread lag
+            const convertedBlob = await heicToFn({
+                blob: file,
+                type: 'image/jpeg',
+                quality: 0.92
+            });
+            const singleBlob = Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob;
+            const newName = file.name.replace(/\.[^/.]+$/, "") + '.jpg';
+            fileToProcess = new File([singleBlob], newName, { type: 'image/jpeg' });
+            resolvedType = 'image/jpeg';
+        } catch (heicErr) {
+            console.error('HEIC conversion failed for:', file.name, heicErr);
+            alert(`HEIC Transcoding Failed for "${file.name}": ${heicErr.message || heicErr}`);
+            throw heicErr;
+        }
+    }
+
+    if (!resolvedType || resolvedType === 'application/octet-stream') {
+        const fileExt = fileToProcess.name ? fileToProcess.name.split('.').pop().toLowerCase() : '';
+        if (fileExt === 'png') resolvedType = 'image/png';
+        else if (fileExt === 'webp') resolvedType = 'image/webp';
+        else if (fileExt === 'svg') resolvedType = 'image/svg+xml';
+        else if (fileExt === 'gif') resolvedType = 'image/gif';
+        else resolvedType = 'image/jpeg';
+    }
+
+    const previewUrl = URL.createObjectURL(fileToProcess);
+
+    const dataUrlPromise = new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target.result);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(fileToProcess);
+    });
+
+    const dimensionsPromise = getFastImageDimensions(fileToProcess, previewUrl);
+    const [dataUrl, dims] = await Promise.all([dataUrlPromise, dimensionsPromise]);
+
+    if (!dataUrl || !dims) {
+        URL.revokeObjectURL(previewUrl);
+        alert("Unable to decode '" + fileToProcess.name + "'. The image might be unsupported by the browser or corrupted.");
+        return [];
+    }
+
+    const approxBytes = fileToProcess.size || Math.round((dataUrl.length - (dataUrl.indexOf(',') + 1)) * 0.75);
+
+    const fileRecord = {
+        id: Date.now() + Math.random().toString(36).substr(2, 5),
+        file: fileToProcess,
+        dataUrl: dataUrl,
+        originalDataUrl: dataUrl,
+        previewUrl: previewUrl,
+        originalPreviewUrl: previewUrl,
+        quality: 100,
+        width: dims.width,
+        height: dims.height,
+        name: fileToProcess.name,
+        originalBytes: approxBytes,
+        currentBytes: approxBytes,
+        exactPdfSize: approxBytes + 1500,
+        sizeText: formatFileSize(approxBytes),
+        type: resolvedType
+    };
+    fileRecord.sizeFingerprint = getFileSizeFingerprint(fileRecord);
+
+    return [fileRecord];
+}
+
+// Parse uploaded assets (Images, HEIC, and PDFs)
 async function processFiles(files) {
     const validFiles = Array.from(files).filter(f => {
         if (f.type && (f.type.startsWith('image/') || f.type === 'application/pdf')) {
@@ -728,177 +855,15 @@ async function processFiles(files) {
         }
     });
 
-    // Pause 60 FPS GPU spinner & blur compositing during heavy WASM decode so GPU stays at 0%
-    if (hasHeicOrPdf && btnTextEl && btnLoadEl && progressEl) {
-        btnTextEl.style.display = 'none';
-        btnLoadEl.style.display = 'inline-flex';
-        if (spinnerEl) spinnerEl.style.display = 'none';
-        if (glowBgEl) glowBgEl.style.display = 'none';
-        progressEl.textContent = 'Converting HEIC (CPU Turbo)...';
+    // Disable continuous 60 FPS compositor triggers while decoding HEIC/PDF
+    if (hasHeicOrPdf) {
+        if (btnTextEl) btnTextEl.style.display = 'none';
+        if (btnLoadEl) btnLoadEl.style.display = 'inline-flex';
+        if (spinnerEl) spinnerEl.style.display = 'none'; // Stop SVG keyframe rotation
+        if (glowBgEl) glowBgEl.style.display = 'none';   // Disable blur(120px) background passes
+        DOM.btnConvert.classList.remove('btn-glow-active'); // Stop pulse shadow calculations
+        if (progressEl) progressEl.textContent = 'Processing files...';
         await new Promise(r => setTimeout(r, 16));
-    }
-
-    // Force 2D canvases created by heic-to.js onto CPU RAM (willReadFrequently: true) to prevent 100% GPU spikes
-    const origGetContext = HTMLCanvasElement.prototype.getContext;
-    const origOffscreenGetContext = typeof OffscreenCanvas !== 'undefined' ? OffscreenCanvas.prototype.getContext : null;
-
-    function enableCpuCanvasMode() {
-        HTMLCanvasElement.prototype.getContext = function (type, attrs) {
-            if (type === '2d') {
-                attrs = Object.assign({}, attrs, { willReadFrequently: true });
-            }
-            return origGetContext.call(this, type, attrs);
-        };
-        if (origOffscreenGetContext) {
-            OffscreenCanvas.prototype.getContext = function (type, attrs) {
-                if (type === '2d') {
-                    attrs = Object.assign({}, attrs, { willReadFrequently: true });
-                }
-                return origOffscreenGetContext.call(this, type, attrs);
-            };
-        }
-    }
-
-    function restoreCanvasMode() {
-        HTMLCanvasElement.prototype.getContext = origGetContext;
-        if (origOffscreenGetContext) {
-            OffscreenCanvas.prototype.getContext = origOffscreenGetContext;
-        }
-    }
-
-    // Fast <1ms binary JPEG header parser (reads width/height without decoding the image)
-    async function getFastImageDimensions(blob, previewUrl) {
-        if (blob && (blob.type === 'image/jpeg' || blob.type === 'image/jpg')) {
-            try {
-                const slice = blob.slice(0, 65536);
-                const buffer = await slice.arrayBuffer();
-                const view = new DataView(buffer);
-                if (view.byteLength >= 4 && view.getUint16(0, false) === 0xFFD8) {
-                    let offset = 2;
-                    while (offset + 9 < view.byteLength) {
-                        if (view.getUint8(offset) !== 0xFF) break;
-                        const marker = view.getUint8(offset + 1);
-                        if (marker === 0xFF) {
-                            offset++;
-                            continue;
-                        }
-                        if (marker === 0xC0 || marker === 0xC1 || marker === 0xC2) {
-                            const height = view.getUint16(offset + 5, false);
-                            const width = view.getUint16(offset + 7, false);
-                            if (width > 0 && height > 0) {
-                                return { width, height };
-                            }
-                            break;
-                        }
-                        const segLength = view.getUint16(offset + 2, false);
-                        if (segLength < 2) break;
-                        offset += 2 + segLength;
-                    }
-                }
-            } catch (_) { }
-        }
-
-        return new Promise((resolve) => {
-            const img = new Image();
-            img.decoding = 'async';
-            img.onload = () => resolve({
-                width: img.naturalWidth || img.width,
-                height: img.naturalHeight || img.height
-            });
-            img.onerror = () => resolve(null);
-            img.src = previewUrl;
-        });
-    }
-
-    async function processSingleImageFile(file) {
-        let fileToProcess = file;
-        let resolvedType = file.type;
-        const ext = file.name ? file.name.split('.').pop().toLowerCase() : '';
-        const isHeic = ext === 'heic' || ext === 'heif' || (resolvedType && (resolvedType.includes('heic') || resolvedType.includes('heif')));
-
-        if (isHeic) {
-            let convertFn = null;
-            if (typeof HeicTo === 'function') {
-                convertFn = HeicTo;
-            } else if (typeof HeicTo === 'object' && typeof HeicTo.heicTo === 'function') {
-                convertFn = HeicTo.heicTo;
-            } else if (typeof heicTo === 'function') {
-                convertFn = heicTo;
-            }
-
-            if (!convertFn) {
-                alert("HEIC Conversion Failed: The transcoding library (heic-to.js) failed to load.");
-                throw new Error("HEIC transcoder library is not loaded.");
-            }
-
-            try {
-                enableCpuCanvasMode();
-                const convertedBlob = await convertFn({
-                    blob: file,
-                    type: 'image/jpeg',
-                    quality: 0.92
-                });
-                const singleBlob = Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob;
-                const newName = file.name.replace(/\.[^/.]+$/, "") + '.jpg';
-                fileToProcess = new File([singleBlob], newName, { type: 'image/jpeg' });
-                resolvedType = 'image/jpeg';
-            } catch (heicErr) {
-                console.error('HEIC conversion failed for:', file.name, heicErr);
-                alert(`HEIC Transcoding Failed for "${file.name}": ${heicErr.message || heicErr}`);
-                throw heicErr;
-            }
-        }
-
-        if (!resolvedType || resolvedType === 'application/octet-stream') {
-            const fileExt = fileToProcess.name ? fileToProcess.name.split('.').pop().toLowerCase() : '';
-            if (fileExt === 'png') resolvedType = 'image/png';
-            else if (fileExt === 'webp') resolvedType = 'image/webp';
-            else if (fileExt === 'svg') resolvedType = 'image/svg+xml';
-            else if (fileExt === 'gif') resolvedType = 'image/gif';
-            else resolvedType = 'image/jpeg';
-        }
-
-        const previewUrl = URL.createObjectURL(fileToProcess);
-
-        const dataUrlPromise = new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onload = (e) => resolve(e.target.result);
-            reader.onerror = () => resolve(null);
-            reader.readAsDataURL(fileToProcess);
-        });
-
-        const dimensionsPromise = getFastImageDimensions(fileToProcess, previewUrl);
-
-        const [dataUrl, dims] = await Promise.all([dataUrlPromise, dimensionsPromise]);
-
-        if (!dataUrl || !dims) {
-            URL.revokeObjectURL(previewUrl);
-            alert("Unable to decode '" + fileToProcess.name + "'. The image might be unsupported by the browser or corrupted.");
-            return [];
-        }
-
-        const approxBytes = fileToProcess.size || Math.round((dataUrl.length - (dataUrl.indexOf(',') + 1)) * 0.75);
-
-        const fileRecord = {
-            id: Date.now() + Math.random().toString(36).substr(2, 5),
-            file: fileToProcess,
-            dataUrl: dataUrl,
-            originalDataUrl: dataUrl,
-            previewUrl: previewUrl,
-            originalPreviewUrl: previewUrl,
-            quality: 100,
-            width: dims.width,
-            height: dims.height,
-            name: fileToProcess.name,
-            originalBytes: approxBytes,
-            currentBytes: approxBytes,
-            exactPdfSize: approxBytes + 1500,
-            sizeText: formatFileSize(approxBytes),
-            type: resolvedType
-        };
-        fileRecord.sizeFingerprint = getFileSizeFingerprint(fileRecord);
-
-        return [fileRecord];
     }
 
     async function runParallelPool(items, worker, concurrency) {
@@ -908,6 +873,7 @@ async function processFiles(files) {
             while (nextIndex < items.length) {
                 const index = nextIndex++;
                 results[index] = await worker(items[index], index);
+                await new Promise(r => setTimeout(r, 40));
             }
         });
         await Promise.all(workers);
@@ -915,9 +881,6 @@ async function processFiles(files) {
     }
 
     try {
-        if (hasHeicOrPdf) {
-            enableCpuCanvasMode();
-        }
         const hardwareConcurrency = navigator.hardwareConcurrency || 4;
         const fileConcurrency = hasHeicOrPdf
             ? Math.max(2, Math.min(4, hardwareConcurrency))
@@ -948,10 +911,10 @@ async function processFiles(files) {
             updateUIState();
         }
     } finally {
-        restoreCanvasMode();
         DOM.fileInput.value = '';
         if (spinnerEl) spinnerEl.style.display = '';
         if (glowBgEl) glowBgEl.style.display = '';
+        DOM.btnConvert.classList.add('btn-glow-active');
         if (btnTextEl && btnLoadEl) {
             btnTextEl.style.display = 'inline-flex';
             btnLoadEl.style.display = 'none';
@@ -1572,7 +1535,6 @@ async function ensureJpegDataUrl(dataUrl) {
             canvas.width = img.naturalWidth || img.width;
             canvas.height = img.naturalHeight || img.height;
             const ctx = canvas.getContext('2d');
-            // White solid background prevents transparent areas becoming black in JPEG
             ctx.fillStyle = '#FFFFFF';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(img, 0, 0);
@@ -1601,7 +1563,6 @@ async function saveSeparateImages() {
             updateStickyProgress(true, `Saving image ${i + 1} of ${total}...`);
 
             const quality = fileObj.quality || 100;
-            // Always compress single-pass from pristine source
             const processedImage = await processQualityRatio(
                 fileObj.previewUrl || fileObj.dataUrl,
                 fileObj.type,
@@ -1609,9 +1570,7 @@ async function saveSeparateImages() {
                 fileObj.currentBytes || fileObj.originalBytes
             );
 
-            // Bypass double-compression: ensureJpegDataUrl will NOT recompress an already generated JPEG
             const jpegUrl = await ensureJpegDataUrl(processedImage.url);
-
             const cleanName = (fileObj.name || `image_${i + 1}`).replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').trim().replace(/\s+/g, "_") || `image_${i + 1}`;
             const fileName = total > 1 ? `${cleanName}_${i + 1}.jpg` : `${cleanName}_extracted.jpg`;
 
@@ -1672,7 +1631,6 @@ async function saveZipImages() {
             const cleanName = (fileObj.name || `image_${i + 1}`).replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').trim().replace(/\s+/g, "_") || `image_${i + 1}`;
             const fileName = total > 1 ? `${cleanName}_${i + 1}.${ext}` : `${cleanName}.${ext}`;
 
-            // High-speed binary ingestion into JSZip
             if (processedImage.blob && !isPng) {
                 zip.file(fileName, processedImage.blob);
             } else {
@@ -1944,9 +1902,8 @@ async function runCanvasTask(task) {
     }
 }
 
-// 2x Fast Hardware-Accelerated Quality Compressor (Exact Original Dimensions, Single-Pass)
+// Fast Hardware-Accelerated Quality Compressor (Exact Original Dimensions, Single-Pass)
 async function processQualityRatio(sourceData, mimeType, quality, knownByteSize = null) {
-    // Instant zero-overhead fast path for 100% Original Quality
     if (quality === 100 || mimeType === 'image/svg+xml') {
         const format = (mimeType && mimeType.includes('png')) ? 'PNG' : 'JPEG';
         let byteSize = knownByteSize;
@@ -1976,7 +1933,6 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
     }
 
     const processingPromise = runCanvasTask(async () => {
-        // Fast path: Hardware OffscreenCanvas without CPU willReadFrequently throttling
         if (typeof createImageBitmap === 'function' && typeof OffscreenCanvas !== 'undefined') {
             try {
                 let blob = null;
@@ -1987,16 +1943,14 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
                     blob = sourceData;
                 }
 
-                // Native hardware decode directly into an ImageBitmap
                 const bitmap = await createImageBitmap(blob);
                 const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
                 const ctx = canvas.getContext('2d');
 
-                // Clean solid white background (prevents transparent PNG/WebP turned into black)
                 ctx.fillStyle = '#FFFFFF';
                 ctx.fillRect(0, 0, bitmap.width, bitmap.height);
                 ctx.drawImage(bitmap, 0, 0);
-                bitmap.close(); // Immediate memory release
+                bitmap.close();
 
                 const jpegBlob = await canvas.convertToBlob({
                     type: 'image/jpeg',
@@ -2019,7 +1973,6 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
             } catch (_) { }
         }
 
-        // Standard 2D Canvas Fallback
         return new Promise((resolve, reject) => {
             const img = new Image();
             img.onload = function () {
@@ -3026,7 +2979,6 @@ async function applyImageEdits() {
         const finalW = finalCanvas.width;
         const finalH = finalCanvas.height;
         const outputType = fileObj.type === 'image/png' ? 'image/png' : 'image/jpeg';
-        // Encode at near-lossless 0.98 so edit passes never degrade master pixels
         const outputBlob = await new Promise(resolve => {
             finalCanvas.toBlob(resolve, outputType, outputType === 'image/jpeg' ? 0.98 : undefined);
         });
