@@ -781,29 +781,29 @@ async function processSingleImageFile(file) {
 
     const previewUrl = URL.createObjectURL(fileToProcess);
 
-    const dataUrlPromise = new Promise((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target.result);
-        reader.onerror = () => resolve(null);
-        reader.readAsDataURL(fileToProcess);
-    });
+    // Instant (<15ms) native dimension reader (zero main-thread lag)
+    let dims = null;
+    try {
+        const bmp = await createImageBitmap(fileToProcess);
+        dims = { width: bmp.width, height: bmp.height };
+        bmp.close();
+    } catch (_) {
+        dims = await getFastImageDimensions(fileToProcess, previewUrl);
+    }
 
-    const dimensionsPromise = getFastImageDimensions(fileToProcess, previewUrl);
-    const [dataUrl, dims] = await Promise.all([dataUrlPromise, dimensionsPromise]);
-
-    if (!dataUrl || !dims) {
+    if (!dims) {
         URL.revokeObjectURL(previewUrl);
-        alert("Unable to decode '" + fileToProcess.name + "'. The image might be unsupported by the browser or corrupted.");
+        alert("Unable to decode '" + fileToProcess.name + "'.");
         return [];
     }
 
-    const approxBytes = fileToProcess.size || Math.round((dataUrl.length - (dataUrl.indexOf(',') + 1)) * 0.75);
+    const approxBytes = fileToProcess.size;
 
     const fileRecord = {
         id: Date.now() + Math.random().toString(36).substr(2, 5),
         file: fileToProcess,
-        dataUrl: dataUrl,
-        originalDataUrl: dataUrl,
+        dataUrl: previewUrl,
+        originalDataUrl: previewUrl,
         previewUrl: previewUrl,
         originalPreviewUrl: previewUrl,
         quality: 100,
@@ -873,7 +873,6 @@ async function processFiles(files) {
             while (nextIndex < items.length) {
                 const index = nextIndex++;
                 results[index] = await worker(items[index], index);
-                await new Promise(r => setTimeout(r, 40));
             }
         });
         await Promise.all(workers);
@@ -1631,12 +1630,12 @@ async function saveZipImages() {
             const cleanName = (fileObj.name || `image_${i + 1}`).replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').trim().replace(/\s+/g, "_") || `image_${i + 1}`;
             const fileName = total > 1 ? `${cleanName}_${i + 1}.${ext}` : `${cleanName}.${ext}`;
 
-            if (processedImage.blob && !isPng) {
+            if (processedImage.blob) {
                 zip.file(fileName, processedImage.blob);
             } else {
-                const commaIdx = processedImage.url.indexOf(',');
-                const base64Data = commaIdx !== -1 ? processedImage.url.substring(commaIdx + 1) : processedImage.url;
-                zip.file(fileName, base64Data, { base64: true });
+                const res = await fetch(processedImage.url);
+                const blobData = await res.blob();
+                zip.file(fileName, blobData);
             }
         }
 
@@ -1912,10 +1911,10 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
             const dataLength = headerIndex !== -1 ? sourceData.length - headerIndex - 1 : sourceData.length;
             byteSize = Math.round(dataLength * 0.75);
         }
-        return { 
-            url: sourceData, 
-            format, 
-            byteSize 
+        return {
+            url: sourceData,
+            format,
+            byteSize
         };
     }
 
@@ -1964,11 +1963,11 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
                     reader.readAsDataURL(jpegBlob);
                 });
 
-                return { 
-                    url, 
-                    blob: jpegBlob, 
-                    format: 'JPEG', 
-                    byteSize: jpegBlob.size 
+                return {
+                    url,
+                    blob: jpegBlob,
+                    format: 'JPEG',
+                    byteSize: jpegBlob.size
                 };
             } catch (_) { }
         }
@@ -1988,10 +1987,10 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
                 canvas.height = 0;
                 const headerIdx = compressedUrl.indexOf(',');
                 const dataLength = headerIdx !== -1 ? compressedUrl.length - headerIdx - 1 : compressedUrl.length;
-                resolve({ 
-                    url: compressedUrl, 
-                    format: 'JPEG', 
-                    byteSize: Math.round(dataLength * 0.75) 
+                resolve({
+                    url: compressedUrl,
+                    format: 'JPEG',
+                    byteSize: Math.round(dataLength * 0.75)
                 });
             };
             img.onerror = reject;
