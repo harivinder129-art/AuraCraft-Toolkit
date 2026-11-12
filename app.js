@@ -738,7 +738,24 @@ async function getFastImageDimensions(blob, previewUrl) {
     });
 }
 
-// Optimized Modern Image Processing Pipeline (heic-to worker architecture)
+async function createMicroThumbnail(blob, maxSize = 160) {
+    try {
+        const bmp = await createImageBitmap(blob);
+        const scale = Math.min(1, maxSize / Math.max(bmp.width, bmp.height));
+        const w = Math.max(1, Math.round(bmp.width * scale));
+        const h = Math.max(1, Math.round(bmp.height * scale));
+        const canvas = new OffscreenCanvas(w, h);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(bmp, 0, 0, w, h);
+        bmp.close();
+        const thumbBlob = await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.75 });
+        return URL.createObjectURL(thumbBlob);
+    } catch (_) {
+        return null;
+    }
+}
+
+// Optimized Modern Image Processing Pipeline (heic-to direct high-speed pipeline)
 async function processSingleImageFile(file) {
     let fileToProcess = file;
     let resolvedType = file.type;
@@ -746,27 +763,66 @@ async function processSingleImageFile(file) {
     const isHeic = ext === 'heic' || ext === 'heif' || (resolvedType && (resolvedType.includes('heic') || resolvedType.includes('heif')));
 
     if (isHeic) {
-        const heicToFn = window.HeicTo?.heicTo || window.HeicTo || window.heicTo;
-        if (!heicToFn) {
-            alert("HEIC Conversion Failed: The transcoding library (heic-to.js) failed to load.");
-            throw new Error("HEIC transcoder library is not loaded.");
+        let isHeicConverted = false;
+        const t0 = performance.now();
+
+        // Tier 0: Instant hardware native decode (<30ms on Safari / native HEIF browsers)
+        try {
+            const bmp = await createImageBitmap(file);
+            if (bmp && bmp.width > 0 && bmp.height > 0) {
+                const oc = typeof OffscreenCanvas !== 'undefined'
+                    ? new OffscreenCanvas(bmp.width, bmp.height)
+                    : document.createElement('canvas');
+                oc.width = bmp.width;
+                oc.height = bmp.height;
+                const ctx = oc.getContext('2d');
+                ctx.drawImage(bmp, 0, 0);
+                bmp.close();
+                let nativeBlob = null;
+                if (oc.convertToBlob) {
+                    nativeBlob = await oc.convertToBlob({ type: 'image/jpeg', quality: 0.85 });
+                } else if (oc.toBlob) {
+                    nativeBlob = await new Promise(r => oc.toBlob(r, 'image/jpeg', 0.85));
+                }
+                if (nativeBlob) {
+                    const newName = file.name.replace(/\.[^/.]+$/, "") + '.jpg';
+                    fileToProcess = new File([nativeBlob], newName, { type: 'image/jpeg' });
+                    resolvedType = 'image/jpeg';
+                    isHeicConverted = true;
+                }
+            }
+        } catch (_) { }
+
+        // Tier 1: Off-main-thread direct Web Worker pipeline with OffscreenCanvas JPEG encoder
+        if (!isHeicConverted) {
+            const heicToFn = window.HeicTo?.heicTo || window.HeicTo || window.heicTo;
+            if (!heicToFn) {
+                alert("HEIC Conversion Failed: The transcoding library (heic-to.js) failed to load.");
+                throw new Error("HEIC transcoder library is not loaded.");
+            }
+
+            try {
+                const convertedBlob = await heicToFn({
+                    blob: file,
+                    type: 'image/jpeg',
+                    quality: 0.85
+                });
+                const singleBlob = Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob;
+                const newName = file.name.replace(/\.[^/.]+$/, "") + '.jpg';
+                fileToProcess = new File([singleBlob], newName, { type: 'image/jpeg' });
+                resolvedType = 'image/jpeg';
+            } catch (heicErr) {
+                console.error('HEIC conversion failed for:', file.name, heicErr);
+                alert(`HEIC Transcoding Failed for "${file.name}": ${heicErr.message || heicErr}`);
+                throw heicErr;
+            }
         }
 
-        try {
-            // Direct async worker decode stream with zero main-thread lag
-            const convertedBlob = await heicToFn({
-                blob: file,
-                type: 'image/jpeg',
-                quality: 0.92
-            });
-            const singleBlob = Array.isArray(convertedBlob) ? convertedBlob[0] : convertedBlob;
-            const newName = file.name.replace(/\.[^/.]+$/, "") + '.jpg';
-            fileToProcess = new File([singleBlob], newName, { type: 'image/jpeg' });
-            resolvedType = 'image/jpeg';
-        } catch (heicErr) {
-            console.error('HEIC conversion failed for:', file.name, heicErr);
-            alert(`HEIC Transcoding Failed for "${file.name}": ${heicErr.message || heicErr}`);
-            throw heicErr;
+        const t1 = performance.now();
+        const secs = ((t1 - t0) / 1000).toFixed(1);
+        console.log(`[HEIC] Transcoded "${file.name}" in ${secs}s`);
+        if (typeof showToast === 'function') {
+            showToast(`HEIC converted in ${secs}s`);
         }
     }
 
@@ -781,14 +837,14 @@ async function processSingleImageFile(file) {
 
     const previewUrl = URL.createObjectURL(fileToProcess);
 
-    // Instant (<15ms) native dimension reader (zero main-thread lag)
-    let dims = null;
-    try {
-        const bmp = await createImageBitmap(fileToProcess);
-        dims = { width: bmp.width, height: bmp.height };
-        bmp.close();
-    } catch (_) {
-        dims = await getFastImageDimensions(fileToProcess, previewUrl);
+    // <1ms binary header dimension reader (avoids full 24MP bitmap decode)
+    let dims = await getFastImageDimensions(fileToProcess, previewUrl);
+    if (!dims) {
+        try {
+            const bmp = await createImageBitmap(fileToProcess);
+            dims = { width: bmp.width, height: bmp.height };
+            bmp.close();
+        } catch (_) { }
     }
 
     if (!dims) {
@@ -798,6 +854,7 @@ async function processSingleImageFile(file) {
     }
 
     const approxBytes = fileToProcess.size;
+    const thumbUrl = previewUrl;
 
     const fileRecord = {
         id: Date.now() + Math.random().toString(36).substr(2, 5),
@@ -806,6 +863,7 @@ async function processSingleImageFile(file) {
         originalDataUrl: previewUrl,
         previewUrl: previewUrl,
         originalPreviewUrl: previewUrl,
+        thumbUrl: thumbUrl,
         quality: 100,
         width: dims.width,
         height: dims.height,
@@ -869,10 +927,24 @@ async function processFiles(files) {
     async function runParallelPool(items, worker, concurrency) {
         const results = new Array(items.length);
         let nextIndex = 0;
-        const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-            while (nextIndex < items.length) {
+        let completedCount = 0;
+        const total = items.length;
+        const workers = Array.from({ length: Math.min(concurrency, total) }, async () => {
+            while (nextIndex < total) {
                 const index = nextIndex++;
-                results[index] = await worker(items[index], index);
+                if (progressEl && total > 1) {
+                    progressEl.textContent = `Processing image ${index + 1} of ${total}...`;
+                }
+                try {
+                    results[index] = await worker(items[index], index);
+                } catch (poolErr) {
+                    console.error("Pool processing error for item", index, poolErr);
+                    results[index] = [];
+                }
+                completedCount++;
+                if (progressEl && total > 1) {
+                    progressEl.textContent = `Processed ${completedCount} of ${total}`;
+                }
             }
         });
         await Promise.all(workers);
@@ -882,7 +954,7 @@ async function processFiles(files) {
     try {
         const hardwareConcurrency = navigator.hardwareConcurrency || 4;
         const fileConcurrency = hasHeicOrPdf
-            ? Math.max(2, Math.min(4, hardwareConcurrency))
+            ? 2
             : Math.max(4, Math.min(8, hardwareConcurrency));
 
         const resultsArray = await runParallelPool(validFiles, async (file) => {
@@ -978,6 +1050,9 @@ function revokeFileObjectUrls(fileObj) {
     if (fileObj.originalPreviewUrl && fileObj.originalPreviewUrl.startsWith('blob:') && fileObj.originalPreviewUrl !== fileObj.previewUrl) {
         URL.revokeObjectURL(fileObj.originalPreviewUrl);
     }
+    if (fileObj.thumbUrl && fileObj.thumbUrl.startsWith('blob:') && fileObj.thumbUrl !== fileObj.previewUrl) {
+        URL.revokeObjectURL(fileObj.thumbUrl);
+    }
 }
 
 function clearAllFiles() {
@@ -1059,7 +1134,7 @@ function renderUploadedGrid() {
 
         const currentQuality = fileObj.quality || 100;
         const qualityLabel = currentQuality === 100 ? 'Original' : `${currentQuality}%`;
-        const thumbSrc = fileObj.previewUrl || fileObj.dataUrl;
+        const thumbSrc = fileObj.thumbUrl || fileObj.previewUrl || fileObj.dataUrl;
 
         item.innerHTML = `
             <img src="${thumbSrc}" alt="${fileObj.name}" class="node-thumbnail" loading="lazy" decoding="async">
@@ -1409,7 +1484,7 @@ function updateStickyProgress(show, text = '') {
         const btnTextEl = DOM.btnConvert.querySelector('.btn-text');
         const btnLoadEl = DOM.btnConvert.querySelector('.btn-loading');
         const progressEl = document.getElementById('compilationProgress');
-        
+
         if (show) {
             DOM.btnConvert.disabled = true;
             if (btnTextEl) btnTextEl.style.display = 'none';
@@ -1581,7 +1656,7 @@ async function saveSeparateImages() {
 
             // 1. Quality 100% and unedited: use original file/preview directly
             const isNativeJpeg = fileObj.type === 'image/jpeg' || fileObj.type === 'image/jpg';
-                if (quality === 100 && isNativeJpeg && (!fileObj.editCount || fileObj.editCount === 0)) {
+            if (quality === 100 && isNativeJpeg && (!fileObj.editCount || fileObj.editCount === 0)) {
                 downloadUrl = fileObj.previewUrl || fileObj.dataUrl;
             } else {
                 // 2. Check if already compressed by slider in cache
@@ -1873,14 +1948,14 @@ async function compilePDFDocument(progressCallback, cancellationToken = null, fo
 
             const imgData = STATE.files[i];
             const quality = imgData.quality || 100;
-            
+
             let processedUrl = null;
             let processedFormat = (imgData.type && imgData.type.includes('png')) ? 'PNG' : 'JPEG';
 
             // Check if slider already compressed this in cache
             const qualityCache = qualityRatioCache.get(imgData.previewUrl || imgData.dataUrl);
             const cacheKey = `${quality}|${imgData.type}`;
-            
+
             if (quality === 100) {
                 processedUrl = imgData.previewUrl || imgData.dataUrl;
             } else if (qualityCache && qualityCache.has(cacheKey)) {
@@ -3091,10 +3166,14 @@ async function applyImageEdits() {
         if (fileObj.previewUrl && fileObj.previewUrl.startsWith('blob:') && fileObj.previewUrl !== fileObj.originalPreviewUrl) {
             URL.revokeObjectURL(fileObj.previewUrl);
         }
+        if (fileObj.thumbUrl && fileObj.thumbUrl.startsWith('blob:') && fileObj.thumbUrl !== fileObj.originalPreviewUrl) {
+            URL.revokeObjectURL(fileObj.thumbUrl);
+        }
 
         // 3. Assign new edited blob and URLs
         fileObj.dataUrl = croppedDataUrl;
         fileObj.previewUrl = URL.createObjectURL(outputBlob);
+        fileObj.thumbUrl = await createMicroThumbnail(outputBlob) || fileObj.previewUrl;
         fileObj.currentBytes = outputBlob.size;
         fileObj.width = finalW;
         fileObj.height = finalH;
@@ -3120,12 +3199,17 @@ function resetEdits(index) {
     if (!fileObj) return;
 
     const img = new Image();
-    img.onload = function () {
+    img.onload = async function () {
         if (fileObj.previewUrl && fileObj.previewUrl.startsWith('blob:') && fileObj.previewUrl !== fileObj.originalPreviewUrl) {
             URL.revokeObjectURL(fileObj.previewUrl);
         }
+        if (fileObj.thumbUrl && fileObj.thumbUrl.startsWith('blob:') && fileObj.thumbUrl !== fileObj.originalPreviewUrl) {
+            URL.revokeObjectURL(fileObj.thumbUrl);
+        }
+
         fileObj.dataUrl = fileObj.originalDataUrl;
         fileObj.previewUrl = fileObj.originalPreviewUrl || fileObj.originalDataUrl;
+        fileObj.thumbUrl = fileObj.file ? (await createMicroThumbnail(fileObj.file) || fileObj.previewUrl) : fileObj.previewUrl;
         fileObj.currentBytes = fileObj.originalBytes;
         fileObj.width = img.width;
         fileObj.height = img.height;
