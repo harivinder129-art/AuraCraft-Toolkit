@@ -1392,6 +1392,9 @@ function closeAllStickyDropdowns() {
 }
 
 function updateStickyProgress(show, text = '') {
+    const glowBgEl = document.getElementById('glowBg');
+    const spinnerEl = DOM.btnConvert ? DOM.btnConvert.querySelector('.spinner') : null;
+
     if (DOM.stickyProgressContainer) {
         DOM.stickyProgressContainer.style.display = show ? 'inline-flex' : 'none';
     }
@@ -1406,19 +1409,27 @@ function updateStickyProgress(show, text = '') {
         const btnTextEl = DOM.btnConvert.querySelector('.btn-text');
         const btnLoadEl = DOM.btnConvert.querySelector('.btn-loading');
         const progressEl = document.getElementById('compilationProgress');
+        
         if (show) {
             DOM.btnConvert.disabled = true;
             if (btnTextEl) btnTextEl.style.display = 'none';
             if (btnLoadEl) btnLoadEl.style.display = 'inline-flex';
             if (progressEl) progressEl.textContent = text;
+
+            // Kill heavy GPU compositor filters while compiling
+            if (glowBgEl) glowBgEl.style.display = 'none';
+            DOM.btnConvert.classList.remove('btn-glow-active');
         } else {
             DOM.btnConvert.disabled = STATE.files.length === 0;
             if (btnTextEl) btnTextEl.style.display = 'inline-flex';
             if (btnLoadEl) btnLoadEl.style.display = 'none';
+
+            // Restore effects when idle
+            if (glowBgEl) glowBgEl.style.display = '';
+            DOM.btnConvert.classList.add('btn-glow-active');
         }
     }
 }
-
 function setStickyActionsDisabled(disabled) {
     if (DOM.btnStickyExportPdf) DOM.btnStickyExportPdf.disabled = disabled;
     if (DOM.btnStickySaveImages) DOM.btnStickySaveImages.disabled = disabled;
@@ -1547,7 +1558,7 @@ async function ensureJpegDataUrl(dataUrl) {
     });
 }
 
-// 2nd: Save Images -> Separate Images (Batch individual image files, strictly .jpg only)
+// Save Images -> Separate Images (Batch JPG downloads using cache directly),stricly jpg
 async function saveSeparateImages() {
     if (STATE.files.length === 0 || STATE.compiling) return;
     closeAllStickyDropdowns();
@@ -1562,23 +1573,47 @@ async function saveSeparateImages() {
             updateStickyProgress(true, `Saving image ${i + 1} of ${total}...`);
 
             const quality = fileObj.quality || 100;
-            const processedImage = await processQualityRatio(
-                fileObj.previewUrl || fileObj.dataUrl,
-                fileObj.type,
-                quality,
-                fileObj.currentBytes || fileObj.originalBytes
-            );
-
-            const jpegUrl = await ensureJpegDataUrl(processedImage.url);
             const cleanName = (fileObj.name || `image_${i + 1}`).replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').trim().replace(/\s+/g, "_") || `image_${i + 1}`;
             const fileName = total > 1 ? `${cleanName}_${i + 1}.jpg` : `${cleanName}_extracted.jpg`;
 
+            let downloadUrl = null;
+            let revokeNeeded = false;
+
+            // 1. Quality 100% and unedited: use original file/preview directly
+            const isNativeJpeg = fileObj.type === 'image/jpeg' || fileObj.type === 'image/jpg';
+                if (quality === 100 && isNativeJpeg && (!fileObj.editCount || fileObj.editCount === 0)) {
+                downloadUrl = fileObj.previewUrl || fileObj.dataUrl;
+            } else {
+                // 2. Check if already compressed by slider in cache
+                const qualityCache = qualityRatioCache.get(fileObj.previewUrl || fileObj.dataUrl);
+                const cacheKey = `${quality}|${fileObj.type}`;
+
+                if (qualityCache && qualityCache.has(cacheKey)) {
+                    const cached = await qualityCache.get(cacheKey);
+                    downloadUrl = cached.blob ? URL.createObjectURL(cached.blob) : cached.url;
+                    if (cached.blob) revokeNeeded = true;
+                } else {
+                    const processed = await processQualityRatio(
+                        fileObj.previewUrl || fileObj.dataUrl,
+                        fileObj.type,
+                        quality,
+                        fileObj.currentBytes || fileObj.originalBytes
+                    );
+                    downloadUrl = processed.blob ? URL.createObjectURL(processed.blob) : processed.url;
+                    if (processed.blob) revokeNeeded = true;
+                }
+            }
+
             const link = document.createElement('a');
-            link.href = jpegUrl;
+            link.href = downloadUrl;
             link.download = fileName;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
+
+            if (revokeNeeded) {
+                setTimeout(() => URL.revokeObjectURL(downloadUrl), 10000);
+            }
 
             if (i < total - 1) {
                 await delay(350);
@@ -1597,6 +1632,7 @@ async function saveSeparateImages() {
 }
 
 // 2nd: Save Images -> Zip Images (All images packaged into .zip)
+// Save Images -> Zip Images (Uses already-compressed cache directly, 0% extra GPU)
 async function saveZipImages() {
     if (STATE.files.length === 0 || STATE.compiling) return;
     closeAllStickyDropdowns();
@@ -1615,28 +1651,42 @@ async function saveZipImages() {
         const total = STATE.files.length;
 
         for (let i = 0; i < total; i++) {
-            updateStickyProgress(true, `Processing image ${i + 1} of ${total}...`);
+            updateStickyProgress(true, `Adding image ${i + 1} of ${total}...`);
             const fileObj = STATE.files[i];
             const quality = fileObj.quality || 100;
-            const processedImage = await processQualityRatio(
-                fileObj.previewUrl || fileObj.dataUrl,
-                fileObj.type,
-                quality,
-                fileObj.currentBytes || fileObj.originalBytes
-            );
-
-            const isPng = processedImage.format === 'PNG' || (fileObj.type && fileObj.type.includes('png'));
-            const ext = isPng ? 'png' : 'jpg';
             const cleanName = (fileObj.name || `image_${i + 1}`).replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').trim().replace(/\s+/g, "_") || `image_${i + 1}`;
+
+            let finalBlob = null;
+
+            // 1. If 100% and unedited, take the existing file directly (0ms)
+            if (quality === 100 && fileObj.file && (!fileObj.editCount || fileObj.editCount === 0)) {
+                finalBlob = fileObj.file;
+            } else {
+                // 2. Already compressed when slider moved? Instant cache hit!
+                const qualityCache = qualityRatioCache.get(fileObj.previewUrl || fileObj.dataUrl);
+                const cacheKey = `${quality}|${fileObj.type}`;
+
+                if (qualityCache && qualityCache.has(cacheKey)) {
+                    const cached = await qualityCache.get(cacheKey);
+                    finalBlob = cached.blob;
+                }
+
+                // 3. Fallback only if not in cache yet
+                if (!finalBlob) {
+                    const processed = await processQualityRatio(
+                        fileObj.previewUrl || fileObj.dataUrl,
+                        fileObj.type,
+                        quality,
+                        fileObj.currentBytes || fileObj.originalBytes
+                    );
+                    finalBlob = processed.blob || await (await fetch(processed.url)).blob();
+                }
+            }
+
+            const ext = (fileObj.type && fileObj.type.includes('png')) ? 'png' : 'jpg';
             const fileName = total > 1 ? `${cleanName}_${i + 1}.${ext}` : `${cleanName}.${ext}`;
 
-            if (processedImage.blob) {
-                zip.file(fileName, processedImage.blob);
-            } else {
-                const res = await fetch(processedImage.url);
-                const blobData = await res.blob();
-                zip.file(fileName, blobData);
-            }
+            zip.file(fileName, finalBlob);
         }
 
         updateStickyProgress(true, 'Compressing ZIP archive (0%)...');
@@ -1681,29 +1731,52 @@ async function convertImagesToPDF() {
 /* ==========================================================================
    Image Extraction & Saving
    ========================================================================== */
+// Per-card "Save Image" button: uses cache directly
 async function downloadSingleImage(index) {
     const fileObj = STATE.files[index];
     if (!fileObj) return;
 
     try {
         const quality = fileObj.quality || 100;
-        const processedImage = await processQualityRatio(
-            fileObj.previewUrl || fileObj.dataUrl,
-            fileObj.type,
-            quality,
-            fileObj.currentBytes || fileObj.originalBytes
-        );
-
-        const jpegUrl = await ensureJpegDataUrl(processedImage.url);
         const cleanName = fileObj.name.replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').replace(/\s+/g, "_");
         const fileName = `${cleanName}_extracted.jpg`;
 
+        let downloadUrl = null;
+        let revokeNeeded = false;
+
+        const isNativeJpeg = fileObj.type === 'image/jpeg' || fileObj.type === 'image/jpg';
+        if (quality === 100 && isNativeJpeg && (!fileObj.editCount || fileObj.editCount === 0)) {
+            downloadUrl = fileObj.previewUrl || fileObj.dataUrl;
+        } else {
+            const qualityCache = qualityRatioCache.get(fileObj.previewUrl || fileObj.dataUrl);
+            const cacheKey = `${quality}|${fileObj.type}`;
+
+            if (qualityCache && qualityCache.has(cacheKey)) {
+                const cached = await qualityCache.get(cacheKey);
+                downloadUrl = cached.blob ? URL.createObjectURL(cached.blob) : cached.url;
+                if (cached.blob) revokeNeeded = true;
+            } else {
+                const processed = await processQualityRatio(
+                    fileObj.previewUrl || fileObj.dataUrl,
+                    fileObj.type,
+                    quality,
+                    fileObj.currentBytes || fileObj.originalBytes
+                );
+                downloadUrl = processed.blob ? URL.createObjectURL(processed.blob) : processed.url;
+                if (processed.blob) revokeNeeded = true;
+            }
+        }
+
         const link = document.createElement('a');
-        link.href = jpegUrl;
+        link.href = downloadUrl;
         link.download = fileName;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+
+        if (revokeNeeded) {
+            setTimeout(() => URL.revokeObjectURL(downloadUrl), 10000);
+        }
     } catch (err) {
         console.error("Failed to download image:", err);
         alert("Failed to download image. Check console details.");
@@ -1794,22 +1867,37 @@ async function compilePDFDocument(progressCallback, cancellationToken = null, fo
         const blobs = [];
         let totalSize = 0;
 
-        const processingPromises = STATE.files.map(imgData => {
-            const quality = imgData.quality || 100;
-            return processQualityRatio(
-                imgData.previewUrl || imgData.dataUrl,
-                imgData.type,
-                quality,
-                imgData.currentBytes || imgData.originalBytes
-            );
-        });
-
         for (let i = 0; i < count; i++) {
             if (cancellationToken && cancellationToken.cancelled) return null;
             if (progressCallback) await progressCallback(i, count);
 
             const imgData = STATE.files[i];
-            const processedImage = await processingPromises[i];
+            const quality = imgData.quality || 100;
+            
+            let processedUrl = null;
+            let processedFormat = (imgData.type && imgData.type.includes('png')) ? 'PNG' : 'JPEG';
+
+            // Check if slider already compressed this in cache
+            const qualityCache = qualityRatioCache.get(imgData.previewUrl || imgData.dataUrl);
+            const cacheKey = `${quality}|${imgData.type}`;
+            
+            if (quality === 100) {
+                processedUrl = imgData.previewUrl || imgData.dataUrl;
+            } else if (qualityCache && qualityCache.has(cacheKey)) {
+                const cached = await qualityCache.get(cacheKey);
+                processedUrl = cached.url;
+                processedFormat = cached.format || 'JPEG';
+            } else {
+                const processed = await processQualityRatio(
+                    imgData.previewUrl || imgData.dataUrl,
+                    imgData.type,
+                    quality,
+                    imgData.currentBytes || imgData.originalBytes
+                );
+                processedUrl = processed.url;
+                processedFormat = processed.format || 'JPEG';
+            }
+
             const usedPageSize = (imgData.pageSizeOverride && imgData.pageSizeOverride !== 'global') ? imgData.pageSizeOverride : STATE.settings.pageSize;
             const usedMargin = (imgData.marginOverride && imgData.marginOverride !== 'global') ? imgData.marginOverride : STATE.settings.margin;
 
@@ -1839,8 +1927,8 @@ async function compilePDFDocument(progressCallback, cancellationToken = null, fo
             const itemDoc = new jsPDF(docConfig);
 
             itemDoc.addImage(
-                processedImage.url,
-                processedImage.format,
+                processedUrl,
+                processedFormat,
                 pageConfig.imgX,
                 pageConfig.imgY,
                 pageConfig.imgW,
@@ -1864,8 +1952,8 @@ async function compilePDFDocument(progressCallback, cancellationToken = null, fo
         if (progressCallback) await progressCallback(count, count);
         return { docs, blobs, size: totalSize };
     }
-}
 
+}
 function applyWatermark(doc, pageConfig, text) {
     doc.setTextColor(150, 150, 150);
     doc.setFontSize(42);
@@ -2995,10 +3083,16 @@ async function applyImageEdits() {
         finalCanvas.width = 0;
         finalCanvas.height = 0;
 
+        // 1. Invalidate old cached quality results for this edited image
+        if (fileObj.previewUrl) qualityRatioCache.delete(fileObj.previewUrl);
+        if (fileObj.dataUrl) qualityRatioCache.delete(fileObj.dataUrl);
+
+        // 2. Revoke previous temporary blob URL
         if (fileObj.previewUrl && fileObj.previewUrl.startsWith('blob:') && fileObj.previewUrl !== fileObj.originalPreviewUrl) {
             URL.revokeObjectURL(fileObj.previewUrl);
         }
 
+        // 3. Assign new edited blob and URLs
         fileObj.dataUrl = croppedDataUrl;
         fileObj.previewUrl = URL.createObjectURL(outputBlob);
         fileObj.currentBytes = outputBlob.size;
@@ -3049,11 +3143,12 @@ function resetEdits(index) {
     img.src = fileObj.originalPreviewUrl || fileObj.originalDataUrl;
 }
 
+// Per-card "Save PDF" button: uses cache directly
 async function downloadSinglePDF(index) {
     const fileObj = STATE.files[index];
     if (!fileObj) return;
 
-    const btn = document.querySelectorAll('.btn-crop-node')[index * 3 + 1];
+    const btn = document.querySelectorAll('.btn-crop-node')[index * 3 + 2];
     if (btn) btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Saving...';
     if (typeof lucide !== 'undefined') {
         lucide.createIcons();
@@ -3061,12 +3156,28 @@ async function downloadSinglePDF(index) {
 
     try {
         const quality = fileObj.quality || 100;
-        const processedImage = await processQualityRatio(
-            fileObj.previewUrl || fileObj.dataUrl,
-            fileObj.type,
-            quality,
-            fileObj.currentBytes || fileObj.originalBytes
-        );
+        let processedUrl = fileObj.previewUrl || fileObj.dataUrl;
+        let processedFormat = (fileObj.type && fileObj.type.includes('png')) ? 'PNG' : 'JPEG';
+
+        if (quality !== 100) {
+            const qualityCache = qualityRatioCache.get(fileObj.previewUrl || fileObj.dataUrl);
+            const cacheKey = `${quality}|${fileObj.type}`;
+
+            if (qualityCache && qualityCache.has(cacheKey)) {
+                const cached = await qualityCache.get(cacheKey);
+                processedUrl = cached.url;
+                processedFormat = cached.format || 'JPEG';
+            } else {
+                const processed = await processQualityRatio(
+                    fileObj.previewUrl || fileObj.dataUrl,
+                    fileObj.type,
+                    quality,
+                    fileObj.currentBytes || fileObj.originalBytes
+                );
+                processedUrl = processed.url;
+                processedFormat = processed.format || 'JPEG';
+            }
+        }
 
         const usedPageSize = (fileObj.pageSizeOverride && fileObj.pageSizeOverride !== 'global') ? fileObj.pageSizeOverride : STATE.settings.pageSize;
         const usedMargin = (fileObj.marginOverride && fileObj.marginOverride !== 'global') ? fileObj.marginOverride : STATE.settings.margin;
@@ -3087,8 +3198,8 @@ async function downloadSinglePDF(index) {
         });
 
         doc.addImage(
-            processedImage.url,
-            processedImage.format,
+            processedUrl,
+            processedFormat,
             pageConfig.imgX,
             pageConfig.imgY,
             pageConfig.imgW,
