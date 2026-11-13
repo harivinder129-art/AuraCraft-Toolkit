@@ -755,12 +755,33 @@ async function createMicroThumbnail(blob, maxSize = 160) {
     }
 }
 
+let _standbyHeicWorker = null;
+
+function prewarmHeicWorker() {
+    if (_standbyHeicWorker) return;
+    try {
+        _standbyHeicWorker = new Worker('heic-worker.js?v=47');
+        _standbyHeicWorker.onerror = () => {
+            try { _standbyHeicWorker.terminate(); } catch (_) { }
+            _standbyHeicWorker = null;
+        };
+    } catch (_) { }
+}
+
+if (typeof window !== 'undefined') {
+    if (document.readyState === 'complete') {
+        prewarmHeicWorker();
+    } else {
+        window.addEventListener('load', prewarmHeicWorker, { once: true });
+    }
+}
+
 /**
  * Fast WebAssembly HEIC/HEIF Decoder via Dedicated Web Worker
  * Runs libheif + libde265 compiled to native WebAssembly in an isolated background thread.
- * Decodes 12MP-48MP HEVC bitstreams in ~1.5 - 2.5s on Windows Chrome.
+ * Optimized with pre-warmed worker pool and zero-copy direct embind decoding.
  */
-function decodeHeicWithWasmWorker(file, quality = 0.85) {
+function decodeHeicWithWasmWorker(file, quality = 0.82) {
     return new Promise(async (resolve, reject) => {
         let worker = null;
         let timeoutId = null;
@@ -824,7 +845,18 @@ function decodeHeicWithWasmWorker(file, quality = 0.85) {
 
         try {
             const buffer = await file.arrayBuffer();
-            worker = new Worker('heic-worker.js?v=46');
+
+            // Use pre-warmed worker to eliminate ~300ms startup and compilation lag
+            if (_standbyHeicWorker) {
+                worker = _standbyHeicWorker;
+                _standbyHeicWorker = null;
+            } else {
+                worker = new Worker('heic-worker.js?v=47');
+            }
+
+            // Schedule fresh standby worker for the next image in background
+            setTimeout(prewarmHeicWorker, 150);
+
             worker.addEventListener('message', handleMessage);
             worker.addEventListener('error', handleError);
 
@@ -847,7 +879,7 @@ function decodeHeicWithWasmWorker(file, quality = 0.85) {
 let _mainThreadWasmLock = Promise.resolve();
 let _mainThreadLibheif = null;
 
-function decodeHeicWithMainThreadWasm(buffer, quality = 0.85) {
+function decodeHeicWithMainThreadWasm(buffer, quality = 0.82) {
     const run = async () => {
         if (!_mainThreadLibheif) {
             const factory = typeof libheif !== 'undefined' ? libheif : (typeof window !== 'undefined' ? window.libheif : null);
@@ -859,6 +891,7 @@ function decodeHeicWithMainThreadWasm(buffer, quality = 0.85) {
 
         let decoder = null;
         let images = null;
+        let decodeResult = null;
 
         try {
             decoder = new _mainThreadLibheif.HeifDecoder();
@@ -876,15 +909,40 @@ function decodeHeicWithMainThreadWasm(buffer, quality = 0.85) {
                 throw new Error(`Invalid HEIC dimensions: ${width}x${height}`);
             }
 
-            const rawData = new Uint8ClampedArray(width * height * 4);
+            decodeResult = _mainThreadLibheif.heif_js_decode_image2(
+                img.handle,
+                _mainThreadLibheif.heif_colorspace.heif_colorspace_RGB,
+                _mainThreadLibheif.heif_chroma.heif_chroma_interleaved_RGBA
+            );
 
-            await new Promise((resolve, reject) => {
-                img.display({ data: rawData, width, height }, (displayData) => {
-                    if (!displayData) return reject(new Error('HEIC bitstream display failed'));
-                    resolve(displayData);
-                });
-            });
+            if (!decodeResult || decodeResult.code || !decodeResult.channels || !decodeResult.channels.length) {
+                throw new Error('HEIC native bitstream decode failed');
+            }
 
+            const channel = decodeResult.channels[0];
+            let clampedData;
+            if (channel.stride === width * 4) {
+                clampedData = new Uint8ClampedArray(channel.data.buffer, channel.data.byteOffset, channel.data.byteLength);
+            } else {
+                clampedData = new Uint8ClampedArray(width * height * 4);
+                const w4 = width * 4;
+                const stride = channel.stride;
+                for (let y = 0; y < height; y++) {
+                    clampedData.set(channel.data.subarray(y * stride, y * stride + w4), y * w4);
+                }
+            }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            const imgData = new ImageData(clampedData, width, height);
+            ctx.putImageData(imgData, 0, 0);
+
+            if (decodeResult.image && _mainThreadLibheif.heif_image_release) {
+                try { _mainThreadLibheif.heif_image_release(decodeResult.image); } catch (_) { }
+                decodeResult.image = null;
+            }
             img.free();
             for (let i = 1; i < images.length; i++) {
                 try { images[i].free(); } catch (_) { }
@@ -897,13 +955,6 @@ function decodeHeicWithMainThreadWasm(buffer, quality = 0.85) {
             }
             decoder = null;
 
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            const imgData = new ImageData(rawData, width, height);
-            ctx.putImageData(imgData, 0, 0);
-
             return await new Promise((resolve, reject) => {
                 canvas.toBlob((blob) => {
                     canvas.width = 0;
@@ -913,6 +964,9 @@ function decodeHeicWithMainThreadWasm(buffer, quality = 0.85) {
                 }, 'image/jpeg', quality);
             });
         } finally {
+            if (decodeResult && decodeResult.image && _mainThreadLibheif && _mainThreadLibheif.heif_image_release) {
+                try { _mainThreadLibheif.heif_image_release(decodeResult.image); } catch (_) { }
+            }
             if (images && images.length) {
                 for (let i = 0; i < images.length; i++) {
                     try { images[i].free(); } catch (_) { }
@@ -962,10 +1016,10 @@ async function processSingleImageFile(file) {
             }
         } catch (_) { }
 
-        // Tier 1: Dedicated Off-Main-Thread WebAssembly Worker (~2s in Chrome / Firefox)
+        // Tier 1: Dedicated Off-Main-Thread WebAssembly Worker
         if (!isHeicConverted) {
             try {
-                convertedBlob = await decodeHeicWithWasmWorker(file, 0.85);
+                convertedBlob = await decodeHeicWithWasmWorker(file, 0.82);
                 if (convertedBlob) isHeicConverted = true;
             } catch (wasmWorkerErr) {
                 console.warn('[HEIC] Dedicated WASM worker unavailable, falling back:', wasmWorkerErr);
@@ -976,7 +1030,7 @@ async function processSingleImageFile(file) {
         if (!isHeicConverted) {
             try {
                 const buf = await file.arrayBuffer();
-                convertedBlob = await decodeHeicWithMainThreadWasm(buf, 0.85);
+                convertedBlob = await decodeHeicWithMainThreadWasm(buf, 0.82);
                 if (convertedBlob) isHeicConverted = true;
             } catch (wasmMainErr) {
                 console.warn('[HEIC] Main-thread WASM decode unavailable, falling back to heic-to.js:', wasmMainErr);
