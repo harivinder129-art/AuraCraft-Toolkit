@@ -760,7 +760,7 @@ let _standbyHeicWorker = null;
 function prewarmHeicWorker() {
     if (_standbyHeicWorker) return;
     try {
-        _standbyHeicWorker = new Worker('heic-worker.js?v=50');
+        _standbyHeicWorker = new Worker('heic-worker.js?v=51');
         _standbyHeicWorker.onerror = () => {
             try { _standbyHeicWorker.terminate(); } catch (_) { }
             _standbyHeicWorker = null;
@@ -851,7 +851,7 @@ function decodeHeicWithWasmWorker(file, quality = 0.82) {
                 worker = _standbyHeicWorker;
                 _standbyHeicWorker = null;
             } else {
-                worker = new Worker('heic-worker.js?v=50');
+                worker = new Worker('heic-worker.js?v=51');
             }
 
             // Schedule fresh standby worker for the next image in background
@@ -1228,6 +1228,13 @@ async function processFiles(files) {
                 applyLargeUploadDefaults();
             }
             updateUIState();
+
+            // Background pre-warming of image bitmaps during idle time for instant 0ms slider response
+            if (typeof requestIdleCallback === 'function') {
+                requestIdleCallback(() => allRecords.forEach(prewarmFileBitmap));
+            } else {
+                setTimeout(() => allRecords.forEach(prewarmFileBitmap), 100);
+            }
         }
     } finally {
         DOM.fileInput.value = '';
@@ -1249,6 +1256,23 @@ function formatFileSize(bytes) {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
+function prewarmFileBitmap(fileObj) {
+    if (!fileObj || fileObj._cachedBitmap || typeof createImageBitmap !== 'function') return;
+    try {
+        if (fileObj.file) {
+            createImageBitmap(fileObj.file).then(bmp => {
+                if (!fileObj._cachedBitmap) fileObj._cachedBitmap = bmp;
+            }).catch(() => {});
+        } else if (fileObj.previewUrl) {
+            fetch(fileObj.previewUrl).then(r => r.blob()).then(b => {
+                return createImageBitmap(b);
+            }).then(bmp => {
+                if (!fileObj._cachedBitmap) fileObj._cachedBitmap = bmp;
+            }).catch(() => {});
+        }
+    } catch (_) {}
+}
+
 function updateSizeBadge(badge, label, bytes) {
     if (!badge) return;
 
@@ -1261,6 +1285,12 @@ function updateSizeBadge(badge, label, bytes) {
     let labelEl = badge.querySelector('.size-label');
     let numberEl = badge.querySelector('.size-number');
     let unitEl = badge.querySelector('.size-unit');
+
+    if (isWaiting) {
+        badge.classList.add('badge-waiting');
+    } else {
+        badge.classList.remove('badge-waiting');
+    }
 
     if (!labelEl || !numberEl || !unitEl) {
         badge.innerHTML = `
@@ -1461,8 +1491,8 @@ function renderUploadedGrid() {
                 updateEstimatedTotalFromIndividualSizes();
             });
 
-            // Fast 250ms debounce: recalculates real output size rapidly when user pauses or settles slider
-            debouncedRecalculate(parseInt(inlineSlider.getAttribute('data-index')), 250);
+            // Ultra-responsive 200ms debounce: recalculates real output size rapidly when user pauses or settles slider
+            debouncedRecalculate(parseInt(inlineSlider.getAttribute('data-index')), 200);
         });
 
         inlineSlider.addEventListener('change', () => {
@@ -1470,13 +1500,19 @@ function renderUploadedGrid() {
                 cancelAnimationFrame(inlineQualityPreviewFrame);
                 inlineQualityPreviewFrame = null;
             }
-            // User released slider: trigger real output size calculation immediately
-            debouncedRecalculate(parseInt(inlineSlider.getAttribute('data-index')), 20);
+            // User released slider thumb: trigger real output size calculation immediately
+            debouncedRecalculate(parseInt(inlineSlider.getAttribute('data-index')), 0);
         });
 
         const preventDrag = () => { item.draggable = false; };
         const restoreDrag = () => { item.draggable = true; };
-        inlineSlider.addEventListener('pointerdown', preventDrag);
+        const prewarmOnPointer = () => prewarmFileBitmap(fileObj);
+        inlineSlider.addEventListener('pointerenter', prewarmOnPointer);
+        inlineSlider.addEventListener('focus', prewarmOnPointer);
+        inlineSlider.addEventListener('pointerdown', (e) => {
+            preventDrag();
+            prewarmOnPointer();
+        });
         inlineSlider.addEventListener('pointerup', restoreDrag);
         inlineSlider.addEventListener('pointercancel', restoreDrag);
         inlineSlider.addEventListener('pointerleave', restoreDrag);
@@ -2185,8 +2221,15 @@ async function compilePDFDocument(progressCallback, cancellationToken = null, fo
                 doc.addPage([pageConfig.pageW, pageConfig.pageH], pageConfig.pageW > pageConfig.pageH ? 'l' : 'p');
             }
 
+            let imageSource = processedImage.url;
+            if (processedImage.getUint8Array) {
+                imageSource = await processedImage.getUint8Array();
+            } else if (processedImage.blob) {
+                imageSource = new Uint8Array(await processedImage.blob.arrayBuffer());
+            }
+
             doc.addImage(
-                processedImage.url,
+                imageSource,
                 processedImage.format,
                 pageConfig.imgX,
                 pageConfig.imgY,
@@ -2268,8 +2311,15 @@ async function compilePDFDocument(progressCallback, cancellationToken = null, fo
 
             const itemDoc = new jsPDF(docConfig);
 
+            let itemImageSource = processedUrl;
+            if (processed && processed.getUint8Array) {
+                itemImageSource = await processed.getUint8Array();
+            } else if (processed && processed.blob) {
+                itemImageSource = new Uint8Array(await processed.blob.arrayBuffer());
+            }
+
             itemDoc.addImage(
-                processedUrl,
+                itemImageSource,
                 processedFormat,
                 pageConfig.imgX,
                 pageConfig.imgY,
@@ -2333,6 +2383,35 @@ async function runCanvasTask(task) {
 
 let _sharedOffscreenCanvas = null;
 let _sharedCtx = null;
+let _sharedCanvasCleanupTimer = null;
+
+function getSharedOffscreenCanvas(width, height) {
+    if (_sharedCanvasCleanupTimer) {
+        clearTimeout(_sharedCanvasCleanupTimer);
+        _sharedCanvasCleanupTimer = null;
+    }
+    if (!_sharedOffscreenCanvas) {
+        _sharedOffscreenCanvas = new OffscreenCanvas(width, height);
+        _sharedCtx = _sharedOffscreenCanvas.getContext('2d');
+    } else if (_sharedOffscreenCanvas.width !== width || _sharedOffscreenCanvas.height !== height) {
+        _sharedOffscreenCanvas.width = width;
+        _sharedOffscreenCanvas.height = height;
+    }
+    return { canvas: _sharedOffscreenCanvas, ctx: _sharedCtx };
+}
+
+function scheduleSharedCanvasCleanup() {
+    if (_sharedCanvasCleanupTimer) clearTimeout(_sharedCanvasCleanupTimer);
+    _sharedCanvasCleanupTimer = setTimeout(() => {
+        _sharedCanvasCleanupTimer = null;
+        if (_sharedOffscreenCanvas) {
+            _sharedOffscreenCanvas.width = 0;
+            _sharedOffscreenCanvas.height = 0;
+            _sharedOffscreenCanvas = null;
+            _sharedCtx = null;
+        }
+    }, 10000);
+}
 
 // Fast Hardware-Accelerated Quality Compressor (Exact Original Dimensions, Single-Pass)
 async function processQualityRatio(sourceData, mimeType, quality, knownByteSize = null, fileObj = null, onlyByteSize = false) {
@@ -2385,42 +2464,44 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
                     }
                 }
 
-                if (!_sharedOffscreenCanvas) {
-                    _sharedOffscreenCanvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-                    _sharedCtx = _sharedOffscreenCanvas.getContext('2d');
-                } else {
-                    _sharedOffscreenCanvas.width = bitmap.width;
-                    _sharedOffscreenCanvas.height = bitmap.height;
-                }
+                const { canvas, ctx } = getSharedOffscreenCanvas(bitmap.width, bitmap.height);
 
                 const isJpeg = (mimeType && (mimeType.includes('jpeg') || mimeType.includes('jpg')));
                 if (!isJpeg) {
-                    _sharedCtx.fillStyle = '#FFFFFF';
-                    _sharedCtx.fillRect(0, 0, bitmap.width, bitmap.height);
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillRect(0, 0, bitmap.width, bitmap.height);
                 }
-                _sharedCtx.drawImage(bitmap, 0, 0);
+                ctx.drawImage(bitmap, 0, 0);
 
-                const jpegBlob = await _sharedOffscreenCanvas.convertToBlob({
+                const jpegBlob = await canvas.convertToBlob({
                     type: 'image/jpeg',
                     quality: quality / 100
                 });
 
-                // Immediate cleanup of shared canvas surface to save GPU memory
-                _sharedOffscreenCanvas.width = 0;
-                _sharedOffscreenCanvas.height = 0;
+                // Keep texture buffer warm during slider movements; auto-releases after 10s idle
+                scheduleSharedCanvasCleanup();
 
                 // Lazy URL generation: only generate Base64 Data URL if accessed/needed
-                let dataUrlPromise = null;
-                const getDataUrl = () => {
-                    if (!dataUrlPromise) {
-                        dataUrlPromise = new Promise((resolve, reject) => {
+                let _dataUrl = null;
+                let _uint8Array = null;
+
+                const getDataUrl = async () => {
+                    if (!_dataUrl) {
+                        _dataUrl = await new Promise((resolve, reject) => {
                             const reader = new FileReader();
                             reader.onload = () => resolve(reader.result);
                             reader.onerror = reject;
                             reader.readAsDataURL(jpegBlob);
                         });
                     }
-                    return dataUrlPromise;
+                    return _dataUrl;
+                };
+
+                const getUint8Array = async () => {
+                    if (!_uint8Array) {
+                        _uint8Array = new Uint8Array(await jpegBlob.arrayBuffer());
+                    }
+                    return _uint8Array;
                 };
 
                 let initialUrl = '';
@@ -2435,7 +2516,8 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
                     blob: jpegBlob,
                     format: 'JPEG',
                     byteSize: jpegBlob.size,
-                    getDataUrl
+                    getDataUrl,
+                    getUint8Array
                 };
             } catch (_) { }
         }
@@ -3575,16 +3657,17 @@ async function downloadSinglePDF(index) {
         let processedUrl = fileObj.previewUrl || fileObj.dataUrl;
         let processedFormat = (fileObj.type && fileObj.type.includes('png')) ? 'PNG' : 'JPEG';
 
+        let processedResult = null;
         if (quality !== 100) {
             const qualityCache = qualityRatioCache.get(fileObj.previewUrl || fileObj.dataUrl);
             const cacheKey = `${quality}|${fileObj.type}`;
 
             if (qualityCache && qualityCache.has(cacheKey)) {
-                const cached = await qualityCache.get(cacheKey);
-                processedUrl = cached.url;
-                processedFormat = cached.format || 'JPEG';
+                processedResult = await qualityCache.get(cacheKey);
+                processedUrl = processedResult.url;
+                processedFormat = processedResult.format || 'JPEG';
             } else {
-                const processed = await processQualityRatio(
+                processedResult = await processQualityRatio(
                     fileObj.previewUrl || fileObj.dataUrl,
                     fileObj.type,
                     quality,
@@ -3592,8 +3675,8 @@ async function downloadSinglePDF(index) {
                     fileObj,
                     false
                 );
-                processedUrl = processed.url;
-                processedFormat = processed.format || 'JPEG';
+                processedUrl = processedResult.url;
+                processedFormat = processedResult.format || 'JPEG';
             }
         }
 
@@ -3615,8 +3698,15 @@ async function downloadSinglePDF(index) {
             format: [pageConfig.pageW, pageConfig.pageH]
         });
 
+        let singleImageSource = processedUrl;
+        if (processedResult && processedResult.getUint8Array) {
+            singleImageSource = await processedResult.getUint8Array();
+        } else if (processedResult && processedResult.blob) {
+            singleImageSource = new Uint8Array(await processedResult.blob.arrayBuffer());
+        }
+
         doc.addImage(
-            processedUrl,
+            singleImageSource,
             processedFormat,
             pageConfig.imgX,
             pageConfig.imgY,

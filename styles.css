@@ -692,6 +692,16 @@ body {
     100% { opacity: 1; }
 }
 
+.badge-waiting .size-number {
+    opacity: 0.55;
+    animation: sizeBadgeWaitingPulse 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes sizeBadgeWaitingPulse {
+    0% { opacity: 0.4; }
+    100% { opacity: 0.85; }
+}
+
 /* Elegant dropdown selectors */
 .select-wrapper {
     position: relative;
