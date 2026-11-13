@@ -760,7 +760,7 @@ let _standbyHeicWorker = null;
 function prewarmHeicWorker() {
     if (_standbyHeicWorker) return;
     try {
-        _standbyHeicWorker = new Worker('heic-worker.js?v=51');
+        _standbyHeicWorker = new Worker('heic-worker.js?v=52');
         _standbyHeicWorker.onerror = () => {
             try { _standbyHeicWorker.terminate(); } catch (_) { }
             _standbyHeicWorker = null;
@@ -851,7 +851,7 @@ function decodeHeicWithWasmWorker(file, quality = 0.82) {
                 worker = _standbyHeicWorker;
                 _standbyHeicWorker = null;
             } else {
-                worker = new Worker('heic-worker.js?v=51');
+                worker = new Worker('heic-worker.js?v=52');
             }
 
             // Schedule fresh standby worker for the next image in background
@@ -1258,6 +1258,16 @@ function formatFileSize(bytes) {
 
 function prewarmFileBitmap(fileObj) {
     if (!fileObj || fileObj._cachedBitmap || typeof createImageBitmap !== 'function') return;
+    const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    // On mobile devices, keep at most 1 heavy bitmap in memory to prevent mobile browser memory pressure
+    if (isMobile) {
+        STATE.files.forEach(f => {
+            if (f !== fileObj && f._cachedBitmap) {
+                try { f._cachedBitmap.close(); } catch (_) {}
+                f._cachedBitmap = null;
+            }
+        });
+    }
     try {
         if (fileObj.file) {
             createImageBitmap(fileObj.file).then(bmp => {
@@ -2361,7 +2371,12 @@ const canvasTaskWaiters = [];
 const qualityRatioCache = new Map();
 
 function getCanvasConcurrency() {
-    return Math.max(1, Math.min(4, navigator.hardwareConcurrency || 4));
+    const isMobile = typeof navigator !== 'undefined' && (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && window.innerWidth < 1024));
+    if (isMobile) return 1;
+    const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 2;
+    // On dual-core or low-core laptops, 1 task at a time avoids memory and bus contention
+    if (cores <= 4) return 1;
+    return Math.min(3, Math.floor(cores / 2));
 }
 
 async function runCanvasTask(task) {
@@ -2392,7 +2407,8 @@ function getSharedOffscreenCanvas(width, height) {
     }
     if (!_sharedOffscreenCanvas) {
         _sharedOffscreenCanvas = new OffscreenCanvas(width, height);
-        _sharedCtx = _sharedOffscreenCanvas.getContext('2d');
+        // willReadFrequently: true keeps canvas in CPU RAM with SIMD, bypassing heavy GPU readback & 95% GPU lock
+        _sharedCtx = _sharedOffscreenCanvas.getContext('2d', { willReadFrequently: true });
     } else if (_sharedOffscreenCanvas.width !== width || _sharedOffscreenCanvas.height !== height) {
         _sharedOffscreenCanvas.width = width;
         _sharedOffscreenCanvas.height = height;
@@ -2402,6 +2418,8 @@ function getSharedOffscreenCanvas(width, height) {
 
 function scheduleSharedCanvasCleanup() {
     if (_sharedCanvasCleanupTimer) clearTimeout(_sharedCanvasCleanupTimer);
+    const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const timeoutMs = isMobile ? 4000 : 8000;
     _sharedCanvasCleanupTimer = setTimeout(() => {
         _sharedCanvasCleanupTimer = null;
         if (_sharedOffscreenCanvas) {
@@ -2410,7 +2428,7 @@ function scheduleSharedCanvasCleanup() {
             _sharedOffscreenCanvas = null;
             _sharedCtx = null;
         }
-    }, 10000);
+    }, timeoutMs);
 }
 
 // Fast Hardware-Accelerated Quality Compressor (Exact Original Dimensions, Single-Pass)
