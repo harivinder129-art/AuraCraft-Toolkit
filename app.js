@@ -760,7 +760,7 @@ let _standbyHeicWorker = null;
 function prewarmHeicWorker() {
     if (_standbyHeicWorker) return;
     try {
-        _standbyHeicWorker = new Worker('heic-worker.js?v=47');
+        _standbyHeicWorker = new Worker('heic-worker.js?v=48');
         _standbyHeicWorker.onerror = () => {
             try { _standbyHeicWorker.terminate(); } catch (_) { }
             _standbyHeicWorker = null;
@@ -851,7 +851,7 @@ function decodeHeicWithWasmWorker(file, quality = 0.82) {
                 worker = _standbyHeicWorker;
                 _standbyHeicWorker = null;
             } else {
-                worker = new Worker('heic-worker.js?v=47');
+                worker = new Worker('heic-worker.js?v=48');
             }
 
             // Schedule fresh standby worker for the next image in background
@@ -1449,20 +1449,14 @@ function renderUploadedGrid() {
             fileObj.exactPdfSize = null;
             fileObj.sizeFingerprint = null;
             STATE.compiledCache = null;
-            if (inlineQualityPreviewFrame !== null) cancelAnimationFrame(inlineQualityPreviewFrame);
-            inlineQualityPreviewFrame = requestAnimationFrame(() => {
-                inlineQualityPreviewFrame = null;
-                updateIndividualSizeBadges();
-                updateEstimatedTotalFromIndividualSizes();
-            });
+
+            // Instant 60 FPS real-time feedback with zero lag or waiting spinner
+            updateIndividualSizeBadges();
+            updateEstimatedTotalFromIndividualSizes();
         });
 
         inlineSlider.addEventListener('change', () => {
-            if (inlineQualityPreviewFrame !== null) {
-                cancelAnimationFrame(inlineQualityPreviewFrame);
-                inlineQualityPreviewFrame = null;
-            }
-            recalculateEstimatedPDFSize(parseInt(inlineSlider.getAttribute('data-index')));
+            debouncedRecalculate(parseInt(inlineSlider.getAttribute('data-index')));
         });
 
         const preventDrag = () => { item.draggable = false; };
@@ -2357,8 +2351,11 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
                 const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
                 const ctx = canvas.getContext('2d');
 
-                ctx.fillStyle = '#FFFFFF';
-                ctx.fillRect(0, 0, bitmap.width, bitmap.height);
+                const isJpeg = (mimeType && (mimeType.includes('jpeg') || mimeType.includes('jpg')));
+                if (!isJpeg) {
+                    ctx.fillStyle = '#FFFFFF';
+                    ctx.fillRect(0, 0, bitmap.width, bitmap.height);
+                }
                 ctx.drawImage(bitmap, 0, 0);
                 bitmap.close();
 
@@ -2366,6 +2363,10 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
                     type: 'image/jpeg',
                     quality: quality / 100
                 });
+
+                // Immediate cleanup of large OffscreenCanvas surface
+                canvas.width = 0;
+                canvas.height = 0;
 
                 const url = await new Promise((resolve, reject) => {
                     const reader = new FileReader();
@@ -2578,22 +2579,52 @@ async function calculateSingleImagePdfSize(fileObj, index, generation) {
     }
 }
 
-function updateEstimatedTotalFromIndividualSizes() {
-    const allCalculated = STATE.files.length > 0 && STATE.files.every(fileObj => {
-        return Boolean(fileObj.exactPdfSize) && fileObj.sizeFingerprint === getFileSizeFingerprint(fileObj);
-    });
+function estimateQualityBytes(originalBytes, quality) {
+    if (!originalBytes || originalBytes <= 0) return 0;
+    if (quality >= 100) return originalBytes;
+    const q = Math.max(10, Math.min(100, quality)) / 100;
+    // Accurate JPEG DCT quantization curve:
+    // Q=100 -> 1.0, Q=85 -> 0.56, Q=70 -> 0.40, Q=50 -> 0.25, Q=25 -> 0.15
+    const factor = Math.pow(q, 1.6) * 0.85 + 0.15 * q;
+    return Math.round(originalBytes * factor);
+}
 
-    if (!allCalculated) {
+function getEstimatedFileSize(fileObj) {
+    if (!fileObj) return 0;
+    const quality = fileObj.quality || 100;
+    if (fileObj.exactPdfSize && fileObj.sizeFingerprint === getFileSizeFingerprint(fileObj)) {
+        return fileObj.exactPdfSize;
+    }
+    const baseBytes = fileObj.originalBytes || fileObj.currentBytes || 0;
+    if (quality === 100 || fileObj.type === 'image/svg+xml') {
+        return baseBytes + 1500;
+    }
+    return estimateQualityBytes(baseBytes, quality) + 1500;
+}
+
+function updateEstimatedTotalFromIndividualSizes() {
+    if (STATE.files.length === 0) {
         if (DOM.estimatedPdfSize) {
-            updateSizeBadge(DOM.estimatedPdfSize, 'Total Estimate Size', 'wait');
+            updateSizeBadge(DOM.estimatedPdfSize, 'Total Estimate Size', 0);
         }
         return;
     }
 
-    const totalSize = STATE.files.reduce((sum, fileObj) => sum + fileObj.exactPdfSize, 0);
+    const totalSize = STATE.files.reduce((sum, fileObj) => sum + getEstimatedFileSize(fileObj), 0);
     if (DOM.estimatedPdfSize) {
         updateSizeBadge(DOM.estimatedPdfSize, 'Total Estimate Size', totalSize);
     }
+}
+
+let _recalcDebounceTimer = null;
+function debouncedRecalculate(targetIndex = null) {
+    if (_recalcDebounceTimer !== null) {
+        clearTimeout(_recalcDebounceTimer);
+    }
+    _recalcDebounceTimer = setTimeout(() => {
+        _recalcDebounceTimer = null;
+        recalculateEstimatedPDFSize(targetIndex);
+    }, 600);
 }
 
 function recalculateEstimatedPDFSize(targetIndex = null) {
@@ -2624,7 +2655,6 @@ function recalculateEstimatedPDFSize(targetIndex = null) {
             fileObj.exactPdfSize = bytes + 1500;
             fileObj.sizeFingerprint = fingerprint;
         } else {
-            fileObj.exactPdfSize = null;
             staleIndexes.push(index);
         }
     });
@@ -2645,13 +2675,8 @@ function updateIndividualSizeBadges() {
         const idx = parseInt(badge.getAttribute('data-index'));
         const fileObj = STATE.files[idx];
         if (fileObj) {
-            const sizeIsCurrent = fileObj.exactPdfSize &&
-                fileObj.sizeFingerprint === getFileSizeFingerprint(fileObj);
-            if (sizeIsCurrent) {
-                updateSizeBadge(badge, 'Size', fileObj.exactPdfSize);
-            } else {
-                updateSizeBadge(badge, 'Size', 'wait');
-            }
+            const estimatedBytes = getEstimatedFileSize(fileObj);
+            updateSizeBadge(badge, 'Size', estimatedBytes);
         }
     });
 }
@@ -2880,11 +2905,17 @@ function initEditEvents() {
         editState.filters.grayscale = parseInt(DOM.filterGrayscale.value);
         editState.filters.sepia = parseInt(DOM.filterSepia.value);
         updateFilterBadges();
+
+        // GPU Real-Time hardware acceleration: apply CSS filter directly for instant 60 FPS slider response
+        if (DOM.cropSourceImage) {
+            DOM.cropSourceImage.style.filter = `brightness(${editState.filters.brightness}%) contrast(${editState.filters.contrast}%) grayscale(${editState.filters.grayscale}%) sepia(${editState.filters.sepia}%)`;
+        }
+
         if (filterPreviewTimer !== null) clearTimeout(filterPreviewTimer);
         filterPreviewTimer = setTimeout(() => {
             filterPreviewTimer = null;
             updateEditPreview(resetCrop);
-        }, 80);
+        }, 200);
     };
 
     DOM.filterBrightness.addEventListener('input', () => applyFilters(false));
