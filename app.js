@@ -760,7 +760,7 @@ let _standbyHeicWorker = null;
 function prewarmHeicWorker() {
     if (_standbyHeicWorker) return;
     try {
-        _standbyHeicWorker = new Worker('heic-worker.js?v=49');
+        _standbyHeicWorker = new Worker('heic-worker.js?v=50');
         _standbyHeicWorker.onerror = () => {
             try { _standbyHeicWorker.terminate(); } catch (_) { }
             _standbyHeicWorker = null;
@@ -851,7 +851,7 @@ function decodeHeicWithWasmWorker(file, quality = 0.82) {
                 worker = _standbyHeicWorker;
                 _standbyHeicWorker = null;
             } else {
-                worker = new Worker('heic-worker.js?v=49');
+                worker = new Worker('heic-worker.js?v=50');
             }
 
             // Schedule fresh standby worker for the next image in background
@@ -1292,6 +1292,10 @@ function updateSizeBadge(badge, label, bytes) {
 
 function revokeFileObjectUrls(fileObj) {
     if (!fileObj) return;
+    if (fileObj._cachedBitmap) {
+        try { fileObj._cachedBitmap.close(); } catch (_) { }
+        fileObj._cachedBitmap = null;
+    }
     if (fileObj.previewUrl && fileObj.previewUrl.startsWith('blob:')) {
         URL.revokeObjectURL(fileObj.previewUrl);
     }
@@ -1457,8 +1461,8 @@ function renderUploadedGrid() {
                 updateEstimatedTotalFromIndividualSizes();
             });
 
-            // Smooth debounce: recalculates real output size when user pauses or settles slider
-            debouncedRecalculate(parseInt(inlineSlider.getAttribute('data-index')), 400);
+            // Fast 250ms debounce: recalculates real output size rapidly when user pauses or settles slider
+            debouncedRecalculate(parseInt(inlineSlider.getAttribute('data-index')), 250);
         });
 
         inlineSlider.addEventListener('change', () => {
@@ -1467,7 +1471,7 @@ function renderUploadedGrid() {
                 inlineQualityPreviewFrame = null;
             }
             // User released slider: trigger real output size calculation immediately
-            debouncedRecalculate(parseInt(inlineSlider.getAttribute('data-index')), 50);
+            debouncedRecalculate(parseInt(inlineSlider.getAttribute('data-index')), 20);
         });
 
         const preventDrag = () => { item.draggable = false; };
@@ -1925,7 +1929,9 @@ async function saveSeparateImages() {
                         fileObj.previewUrl || fileObj.dataUrl,
                         fileObj.type,
                         quality,
-                        fileObj.currentBytes || fileObj.originalBytes
+                        fileObj.currentBytes || fileObj.originalBytes,
+                        fileObj,
+                        false
                     );
                     downloadUrl = processed.blob ? URL.createObjectURL(processed.blob) : processed.url;
                     if (processed.blob) revokeNeeded = true;
@@ -2005,7 +2011,9 @@ async function saveZipImages() {
                         fileObj.previewUrl || fileObj.dataUrl,
                         fileObj.type,
                         quality,
-                        fileObj.currentBytes || fileObj.originalBytes
+                        fileObj.currentBytes || fileObj.originalBytes,
+                        fileObj,
+                        false
                     );
                     finalBlob = processed.blob || await (await fetch(processed.url)).blob();
                 }
@@ -2088,7 +2096,9 @@ async function downloadSingleImage(index) {
                     fileObj.previewUrl || fileObj.dataUrl,
                     fileObj.type,
                     quality,
-                    fileObj.currentBytes || fileObj.originalBytes
+                    fileObj.currentBytes || fileObj.originalBytes,
+                    fileObj,
+                    false
                 );
                 downloadUrl = processed.blob ? URL.createObjectURL(processed.blob) : processed.url;
                 if (processed.blob) revokeNeeded = true;
@@ -2126,7 +2136,9 @@ async function compilePDFDocument(progressCallback, cancellationToken = null, fo
                 imgData.previewUrl || imgData.dataUrl,
                 imgData.type,
                 quality,
-                imgData.currentBytes || imgData.originalBytes
+                imgData.currentBytes || imgData.originalBytes,
+                imgData,
+                false
             );
         });
 
@@ -2220,7 +2232,9 @@ async function compilePDFDocument(progressCallback, cancellationToken = null, fo
                     imgData.previewUrl || imgData.dataUrl,
                     imgData.type,
                     quality,
-                    imgData.currentBytes || imgData.originalBytes
+                    imgData.currentBytes || imgData.originalBytes,
+                    imgData,
+                    false
                 );
                 processedUrl = processed.url;
                 processedFormat = processed.format || 'JPEG';
@@ -2317,8 +2331,11 @@ async function runCanvasTask(task) {
     }
 }
 
+let _sharedOffscreenCanvas = null;
+let _sharedCtx = null;
+
 // Fast Hardware-Accelerated Quality Compressor (Exact Original Dimensions, Single-Pass)
-async function processQualityRatio(sourceData, mimeType, quality, knownByteSize = null) {
+async function processQualityRatio(sourceData, mimeType, quality, knownByteSize = null, fileObj = null, onlyByteSize = false) {
     if (quality === 100 || mimeType === 'image/svg+xml') {
         const format = (mimeType && mimeType.includes('png')) ? 'PNG' : 'JPEG';
         let byteSize = knownByteSize;
@@ -2350,47 +2367,75 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
     const processingPromise = runCanvasTask(async () => {
         if (typeof createImageBitmap === 'function' && typeof OffscreenCanvas !== 'undefined') {
             try {
-                let blob = null;
-                if (typeof sourceData === 'string') {
-                    const response = await fetch(sourceData);
-                    blob = await response.blob();
-                } else {
-                    blob = sourceData;
+                // Reuse existing decoded ImageBitmap if available (eliminates 600ms decode lag!)
+                let bitmap = (fileObj && fileObj._cachedBitmap) ? fileObj._cachedBitmap : null;
+                if (!bitmap) {
+                    let blob = null;
+                    if (fileObj && fileObj.file && (fileObj.previewUrl === fileObj.originalPreviewUrl)) {
+                        blob = fileObj.file;
+                    } else if (typeof sourceData === 'string') {
+                        const response = await fetch(sourceData);
+                        blob = await response.blob();
+                    } else {
+                        blob = sourceData;
+                    }
+                    bitmap = await createImageBitmap(blob);
+                    if (fileObj) {
+                        fileObj._cachedBitmap = bitmap;
+                    }
                 }
 
-                const bitmap = await createImageBitmap(blob);
-                const canvas = new OffscreenCanvas(bitmap.width, bitmap.height);
-                const ctx = canvas.getContext('2d');
+                if (!_sharedOffscreenCanvas) {
+                    _sharedOffscreenCanvas = new OffscreenCanvas(bitmap.width, bitmap.height);
+                    _sharedCtx = _sharedOffscreenCanvas.getContext('2d');
+                } else {
+                    _sharedOffscreenCanvas.width = bitmap.width;
+                    _sharedOffscreenCanvas.height = bitmap.height;
+                }
 
                 const isJpeg = (mimeType && (mimeType.includes('jpeg') || mimeType.includes('jpg')));
                 if (!isJpeg) {
-                    ctx.fillStyle = '#FFFFFF';
-                    ctx.fillRect(0, 0, bitmap.width, bitmap.height);
+                    _sharedCtx.fillStyle = '#FFFFFF';
+                    _sharedCtx.fillRect(0, 0, bitmap.width, bitmap.height);
                 }
-                ctx.drawImage(bitmap, 0, 0);
-                bitmap.close();
+                _sharedCtx.drawImage(bitmap, 0, 0);
 
-                const jpegBlob = await canvas.convertToBlob({
+                const jpegBlob = await _sharedOffscreenCanvas.convertToBlob({
                     type: 'image/jpeg',
                     quality: quality / 100
                 });
 
-                // Immediate cleanup of large OffscreenCanvas surface
-                canvas.width = 0;
-                canvas.height = 0;
+                // Immediate cleanup of shared canvas surface to save GPU memory
+                _sharedOffscreenCanvas.width = 0;
+                _sharedOffscreenCanvas.height = 0;
 
-                const url = await new Promise((resolve, reject) => {
-                    const reader = new FileReader();
-                    reader.onload = () => resolve(reader.result);
-                    reader.onerror = reject;
-                    reader.readAsDataURL(jpegBlob);
-                });
+                // Lazy URL generation: only generate Base64 Data URL if accessed/needed
+                let dataUrlPromise = null;
+                const getDataUrl = () => {
+                    if (!dataUrlPromise) {
+                        dataUrlPromise = new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onload = () => resolve(reader.result);
+                            reader.onerror = reject;
+                            reader.readAsDataURL(jpegBlob);
+                        });
+                    }
+                    return dataUrlPromise;
+                };
+
+                let initialUrl = '';
+                if (!onlyByteSize) {
+                    initialUrl = await getDataUrl();
+                }
 
                 return {
-                    url,
+                    get url() {
+                        return initialUrl || URL.createObjectURL(jpegBlob);
+                    },
                     blob: jpegBlob,
                     format: 'JPEG',
-                    byteSize: jpegBlob.size
+                    byteSize: jpegBlob.size,
+                    getDataUrl
                 };
             } catch (_) { }
         }
@@ -2577,7 +2622,9 @@ async function calculateSingleImagePdfSize(fileObj, index, generation) {
         fileObj.previewUrl || fileObj.dataUrl,
         fileObj.type,
         quality,
-        fileObj.currentBytes || fileObj.originalBytes
+        fileObj.currentBytes || fileObj.originalBytes,
+        fileObj,
+        true
     );
     if (generation !== imageEstimateGeneration) return;
     const fingerprint = getFileSizeFingerprint(fileObj);
@@ -3436,6 +3483,10 @@ async function applyImageEdits() {
         finalCanvas.height = 0;
 
         // 1. Invalidate old cached quality results for this edited image
+        if (fileObj._cachedBitmap) {
+            try { fileObj._cachedBitmap.close(); } catch (_) { }
+            fileObj._cachedBitmap = null;
+        }
         if (fileObj.previewUrl) qualityRatioCache.delete(fileObj.previewUrl);
         if (fileObj.dataUrl) qualityRatioCache.delete(fileObj.dataUrl);
 
@@ -3477,6 +3528,10 @@ function resetEdits(index) {
 
     const img = new Image();
     img.onload = async function () {
+        if (fileObj._cachedBitmap) {
+            try { fileObj._cachedBitmap.close(); } catch (_) { }
+            fileObj._cachedBitmap = null;
+        }
         if (fileObj.previewUrl && fileObj.previewUrl.startsWith('blob:') && fileObj.previewUrl !== fileObj.originalPreviewUrl) {
             URL.revokeObjectURL(fileObj.previewUrl);
         }
@@ -3533,7 +3588,9 @@ async function downloadSinglePDF(index) {
                     fileObj.previewUrl || fileObj.dataUrl,
                     fileObj.type,
                     quality,
-                    fileObj.currentBytes || fileObj.originalBytes
+                    fileObj.currentBytes || fileObj.originalBytes,
+                    fileObj,
+                    false
                 );
                 processedUrl = processed.url;
                 processedFormat = processed.format || 'JPEG';
