@@ -760,7 +760,7 @@ let _standbyHeicWorker = null;
 function prewarmHeicWorker() {
     if (_standbyHeicWorker) return;
     try {
-        _standbyHeicWorker = new Worker('heic-worker.js?v=48');
+        _standbyHeicWorker = new Worker('heic-worker.js?v=49');
         _standbyHeicWorker.onerror = () => {
             try { _standbyHeicWorker.terminate(); } catch (_) { }
             _standbyHeicWorker = null;
@@ -851,7 +851,7 @@ function decodeHeicWithWasmWorker(file, quality = 0.82) {
                 worker = _standbyHeicWorker;
                 _standbyHeicWorker = null;
             } else {
-                worker = new Worker('heic-worker.js?v=48');
+                worker = new Worker('heic-worker.js?v=49');
             }
 
             // Schedule fresh standby worker for the next image in background
@@ -1450,13 +1450,24 @@ function renderUploadedGrid() {
             fileObj.sizeFingerprint = null;
             STATE.compiledCache = null;
 
-            // Instant 60 FPS real-time feedback with zero lag or waiting spinner
-            updateIndividualSizeBadges();
-            updateEstimatedTotalFromIndividualSizes();
+            if (inlineQualityPreviewFrame !== null) cancelAnimationFrame(inlineQualityPreviewFrame);
+            inlineQualityPreviewFrame = requestAnimationFrame(() => {
+                inlineQualityPreviewFrame = null;
+                updateIndividualSizeBadges();
+                updateEstimatedTotalFromIndividualSizes();
+            });
+
+            // Smooth debounce: recalculates real output size when user pauses or settles slider
+            debouncedRecalculate(parseInt(inlineSlider.getAttribute('data-index')), 400);
         });
 
         inlineSlider.addEventListener('change', () => {
-            debouncedRecalculate(parseInt(inlineSlider.getAttribute('data-index')));
+            if (inlineQualityPreviewFrame !== null) {
+                cancelAnimationFrame(inlineQualityPreviewFrame);
+                inlineQualityPreviewFrame = null;
+            }
+            // User released slider: trigger real output size calculation immediately
+            debouncedRecalculate(parseInt(inlineSlider.getAttribute('data-index')), 50);
         });
 
         const preventDrag = () => { item.draggable = false; };
@@ -2579,52 +2590,33 @@ async function calculateSingleImagePdfSize(fileObj, index, generation) {
     }
 }
 
-function estimateQualityBytes(originalBytes, quality) {
-    if (!originalBytes || originalBytes <= 0) return 0;
-    if (quality >= 100) return originalBytes;
-    const q = Math.max(10, Math.min(100, quality)) / 100;
-    // Accurate JPEG DCT quantization curve:
-    // Q=100 -> 1.0, Q=85 -> 0.56, Q=70 -> 0.40, Q=50 -> 0.25, Q=25 -> 0.15
-    const factor = Math.pow(q, 1.6) * 0.85 + 0.15 * q;
-    return Math.round(originalBytes * factor);
-}
-
-function getEstimatedFileSize(fileObj) {
-    if (!fileObj) return 0;
-    const quality = fileObj.quality || 100;
-    if (fileObj.exactPdfSize && fileObj.sizeFingerprint === getFileSizeFingerprint(fileObj)) {
-        return fileObj.exactPdfSize;
-    }
-    const baseBytes = fileObj.originalBytes || fileObj.currentBytes || 0;
-    if (quality === 100 || fileObj.type === 'image/svg+xml') {
-        return baseBytes + 1500;
-    }
-    return estimateQualityBytes(baseBytes, quality) + 1500;
-}
-
 function updateEstimatedTotalFromIndividualSizes() {
-    if (STATE.files.length === 0) {
+    const allCalculated = STATE.files.length > 0 && STATE.files.every(fileObj => {
+        return Boolean(fileObj.exactPdfSize) && fileObj.sizeFingerprint === getFileSizeFingerprint(fileObj);
+    });
+
+    if (!allCalculated) {
         if (DOM.estimatedPdfSize) {
-            updateSizeBadge(DOM.estimatedPdfSize, 'Total Estimate Size', 0);
+            updateSizeBadge(DOM.estimatedPdfSize, 'Total Estimate Size', 'wait');
         }
         return;
     }
 
-    const totalSize = STATE.files.reduce((sum, fileObj) => sum + getEstimatedFileSize(fileObj), 0);
+    const totalSize = STATE.files.reduce((sum, fileObj) => sum + fileObj.exactPdfSize, 0);
     if (DOM.estimatedPdfSize) {
         updateSizeBadge(DOM.estimatedPdfSize, 'Total Estimate Size', totalSize);
     }
 }
 
 let _recalcDebounceTimer = null;
-function debouncedRecalculate(targetIndex = null) {
+function debouncedRecalculate(targetIndex = null, delay = 400) {
     if (_recalcDebounceTimer !== null) {
         clearTimeout(_recalcDebounceTimer);
     }
     _recalcDebounceTimer = setTimeout(() => {
         _recalcDebounceTimer = null;
         recalculateEstimatedPDFSize(targetIndex);
-    }, 600);
+    }, delay);
 }
 
 function recalculateEstimatedPDFSize(targetIndex = null) {
@@ -2655,6 +2647,7 @@ function recalculateEstimatedPDFSize(targetIndex = null) {
             fileObj.exactPdfSize = bytes + 1500;
             fileObj.sizeFingerprint = fingerprint;
         } else {
+            fileObj.exactPdfSize = null;
             staleIndexes.push(index);
         }
     });
@@ -2675,8 +2668,13 @@ function updateIndividualSizeBadges() {
         const idx = parseInt(badge.getAttribute('data-index'));
         const fileObj = STATE.files[idx];
         if (fileObj) {
-            const estimatedBytes = getEstimatedFileSize(fileObj);
-            updateSizeBadge(badge, 'Size', estimatedBytes);
+            const sizeIsCurrent = fileObj.exactPdfSize &&
+                fileObj.sizeFingerprint === getFileSizeFingerprint(fileObj);
+            if (sizeIsCurrent) {
+                updateSizeBadge(badge, 'Size', fileObj.exactPdfSize);
+            } else {
+                updateSizeBadge(badge, 'Size', 'wait');
+            }
         }
     });
 }
