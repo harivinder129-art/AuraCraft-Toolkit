@@ -1484,8 +1484,8 @@ function renderUploadedGrid() {
         const inlineSlider = item.querySelector('.inline-quality-slider');
         const inlineBadge = item.querySelector('.inline-quality-badge');
         const inlineControlRow = item.querySelector('.inline-quality-control');
-        let inlineQualityPreviewFrame = null;
 
+        // ZERO CPU/GPU work on 'input' for 120 FPS buttery smooth sliding on mobile touchscreens and low-spec PCs
         inlineSlider.addEventListener('input', (e) => {
             const val = parseInt(e.target.value);
             fileObj.quality = val;
@@ -1494,23 +1494,19 @@ function renderUploadedGrid() {
             fileObj.sizeFingerprint = null;
             STATE.compiledCache = null;
 
-            if (inlineQualityPreviewFrame !== null) cancelAnimationFrame(inlineQualityPreviewFrame);
-            inlineQualityPreviewFrame = requestAnimationFrame(() => {
-                inlineQualityPreviewFrame = null;
-                updateIndividualSizeBadges();
-                updateEstimatedTotalFromIndividualSizes();
-            });
-
-            // Ultra-responsive 200ms debounce: recalculates real output size rapidly when user pauses or settles slider
-            debouncedRecalculate(parseInt(inlineSlider.getAttribute('data-index')), 200);
+            // Immediately mark badges as calculating/waiting so user has instant feedback with 0ms drag lag
+            const sizeBadge = item.querySelector('.individual-pdf-size-badge');
+            if (sizeBadge) {
+                updateSizeBadge(sizeBadge, 'Size', 'wait');
+            }
+            if (DOM.estimatedPdfSize) {
+                updateSizeBadge(DOM.estimatedPdfSize, 'Total Estimate Size', 'wait');
+            }
         });
 
+        // Trigger compression strictly on 'change' (when user lifts their finger or releases mouse button)
+        // Eliminates all mid-drag jank and computes real output size rapidly in a single pass
         inlineSlider.addEventListener('change', () => {
-            if (inlineQualityPreviewFrame !== null) {
-                cancelAnimationFrame(inlineQualityPreviewFrame);
-                inlineQualityPreviewFrame = null;
-            }
-            // User released slider thumb: trigger real output size calculation immediately
             debouncedRecalculate(parseInt(inlineSlider.getAttribute('data-index')), 0);
         });
 
@@ -1519,6 +1515,7 @@ function renderUploadedGrid() {
         const prewarmOnPointer = () => prewarmFileBitmap(fileObj);
         inlineSlider.addEventListener('pointerenter', prewarmOnPointer);
         inlineSlider.addEventListener('focus', prewarmOnPointer);
+        inlineSlider.addEventListener('touchstart', prewarmOnPointer, { passive: true });
         inlineSlider.addEventListener('pointerdown', (e) => {
             preventDrag();
             prewarmOnPointer();
@@ -1526,6 +1523,7 @@ function renderUploadedGrid() {
         inlineSlider.addEventListener('pointerup', restoreDrag);
         inlineSlider.addEventListener('pointercancel', restoreDrag);
         inlineSlider.addEventListener('pointerleave', restoreDrag);
+        inlineSlider.addEventListener('touchend', restoreDrag, { passive: true });
 
         inlineControlRow.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -2431,6 +2429,47 @@ function scheduleSharedCanvasCleanup() {
     }, timeoutMs);
 }
 
+// Persistent DOM Canvas fallback for mobile browsers (iOS Safari / WebKit) using native toBlob
+let _sharedDomCanvas = null;
+let _sharedDomCtx = null;
+let _sharedDomCleanupTimer = null;
+
+function getSharedDomCanvas(width, height) {
+    if (_sharedDomCleanupTimer) {
+        clearTimeout(_sharedDomCleanupTimer);
+        _sharedDomCleanupTimer = null;
+    }
+    if (!_sharedDomCanvas) {
+        _sharedDomCanvas = document.createElement('canvas');
+        _sharedDomCanvas.style.display = 'none';
+        document.body.appendChild(_sharedDomCanvas);
+        _sharedDomCtx = _sharedDomCanvas.getContext('2d', { willReadFrequently: true }) || _sharedDomCanvas.getContext('2d');
+    }
+    if (_sharedDomCanvas.width !== width || _sharedDomCanvas.height !== height) {
+        _sharedDomCanvas.width = width;
+        _sharedDomCanvas.height = height;
+    }
+    return { canvas: _sharedDomCanvas, ctx: _sharedDomCtx };
+}
+
+function scheduleSharedDomCanvasCleanup() {
+    if (_sharedDomCleanupTimer) clearTimeout(_sharedDomCleanupTimer);
+    const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const timeoutMs = isMobile ? 4000 : 8000;
+    _sharedDomCleanupTimer = setTimeout(() => {
+        _sharedDomCleanupTimer = null;
+        if (_sharedDomCanvas) {
+            _sharedDomCanvas.width = 0;
+            _sharedDomCanvas.height = 0;
+            if (_sharedDomCanvas.parentNode) {
+                _sharedDomCanvas.parentNode.removeChild(_sharedDomCanvas);
+            }
+            _sharedDomCanvas = null;
+            _sharedDomCtx = null;
+        }
+    }, timeoutMs);
+}
+
 // Fast Hardware-Accelerated Quality Compressor (Exact Original Dimensions, Single-Pass)
 async function processQualityRatio(sourceData, mimeType, quality, knownByteSize = null, fileObj = null, onlyByteSize = false) {
     if (quality === 100 || mimeType === 'image/svg+xml') {
@@ -2540,26 +2579,100 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
             } catch (_) { }
         }
 
+        // Fast path 2: Direct DOM Canvas + toBlob fallback (the exact high-speed technique from user's snippet for mobile)
+        try {
+            let bitmap = (fileObj && fileObj._cachedBitmap) ? fileObj._cachedBitmap : null;
+            if (!bitmap && typeof createImageBitmap === 'function') {
+                let blob = (fileObj && fileObj.file && (fileObj.previewUrl === fileObj.originalPreviewUrl))
+                    ? fileObj.file
+                    : (typeof sourceData === 'string' ? await (await fetch(sourceData)).blob() : sourceData);
+                bitmap = await createImageBitmap(blob);
+                if (fileObj) fileObj._cachedBitmap = bitmap;
+            }
+
+            if (bitmap && bitmap.width && bitmap.height) {
+                const { canvas, ctx } = getSharedDomCanvas(bitmap.width, bitmap.height);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(0, 0, bitmap.width, bitmap.height);
+                ctx.drawImage(bitmap, 0, 0);
+
+                const jpegBlob = await new Promise((resolve, reject) => {
+                    canvas.toBlob(blob => {
+                        if (blob) resolve(blob);
+                        else reject(new Error('Canvas toBlob failed'));
+                    }, 'image/jpeg', quality / 100);
+                });
+
+                scheduleSharedDomCanvasCleanup();
+
+                let _dataUrl = null;
+                let _uint8Array = null;
+
+                const getDataUrl = async () => {
+                    if (!_dataUrl) {
+                        _dataUrl = await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onload = () => resolve(reader.result);
+                            reader.onerror = reject;
+                            reader.readAsDataURL(jpegBlob);
+                        });
+                    }
+                    return _dataUrl;
+                };
+
+                const getUint8Array = async () => {
+                    if (!_uint8Array) {
+                        _uint8Array = new Uint8Array(await jpegBlob.arrayBuffer());
+                    }
+                    return _uint8Array;
+                };
+
+                let initialUrl = '';
+                if (!onlyByteSize) {
+                    initialUrl = await getDataUrl();
+                }
+
+                return {
+                    get url() {
+                        return initialUrl || URL.createObjectURL(jpegBlob);
+                    },
+                    blob: jpegBlob,
+                    format: 'JPEG',
+                    byteSize: jpegBlob.size,
+                    getDataUrl,
+                    getUint8Array
+                };
+            }
+        } catch (_) { }
+
+        // Ultimate fallback (standard Image element with toBlob)
         return new Promise((resolve, reject) => {
             const img = new Image();
             img.onload = function () {
-                const canvas = document.createElement('canvas');
-                canvas.width = img.naturalWidth || img.width;
-                canvas.height = img.naturalHeight || img.height;
-                const ctx = canvas.getContext('2d');
+                const { canvas, ctx } = getSharedDomCanvas(img.naturalWidth || img.width, img.naturalHeight || img.height);
                 ctx.fillStyle = '#FFFFFF';
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
                 ctx.drawImage(img, 0, 0);
-                const compressedUrl = canvas.toDataURL('image/jpeg', quality / 100);
-                canvas.width = 0;
-                canvas.height = 0;
-                const headerIdx = compressedUrl.indexOf(',');
-                const dataLength = headerIdx !== -1 ? compressedUrl.length - headerIdx - 1 : compressedUrl.length;
-                resolve({
-                    url: compressedUrl,
-                    format: 'JPEG',
-                    byteSize: Math.round(dataLength * 0.75)
-                });
+                canvas.toBlob(blob => {
+                    if (!blob) {
+                        const compressedUrl = canvas.toDataURL('image/jpeg', quality / 100);
+                        const headerIdx = compressedUrl.indexOf(',');
+                        const dataLength = headerIdx !== -1 ? compressedUrl.length - headerIdx - 1 : compressedUrl.length;
+                        resolve({
+                            url: compressedUrl,
+                            format: 'JPEG',
+                            byteSize: Math.round(dataLength * 0.75)
+                        });
+                        return;
+                    }
+                    scheduleSharedDomCanvasCleanup();
+                    resolve({
+                        get url() { return URL.createObjectURL(blob); },
+                        blob: blob,
+                        format: 'JPEG',
+                        byteSize: blob.size
+                    });
+                }, 'image/jpeg', quality / 100);
             };
             img.onerror = reject;
             img.src = sourceData;
