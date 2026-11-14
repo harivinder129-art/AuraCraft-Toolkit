@@ -760,7 +760,7 @@ let _standbyHeicWorker = null;
 function prewarmHeicWorker() {
     if (_standbyHeicWorker) return;
     try {
-        _standbyHeicWorker = new Worker('heic-worker.js?v=53');
+        _standbyHeicWorker = new Worker('heic-worker.js?v=54');
         _standbyHeicWorker.onerror = () => {
             try { _standbyHeicWorker.terminate(); } catch (_) { }
             _standbyHeicWorker = null;
@@ -851,7 +851,7 @@ function decodeHeicWithWasmWorker(file, quality = 0.82) {
                 worker = _standbyHeicWorker;
                 _standbyHeicWorker = null;
             } else {
-                worker = new Worker('heic-worker.js?v=53');
+                worker = new Worker('heic-worker.js?v=54');
             }
 
             // Schedule fresh standby worker for the next image in background
@@ -2482,29 +2482,14 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
                     }
                 }
 
-                // Enforce hardware-safe canvas dimensions for mobile devices (e.g. 4096px canvas limit on iOS)
-                const isMobileDevice = typeof navigator !== 'undefined' && (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && window.innerWidth < 1024));
-                const maxAllowedDim = isMobileDevice ? 4096 : 14000;
-                let drawW = bitmap.width;
-                let drawH = bitmap.height;
-                if (drawW > maxAllowedDim || drawH > maxAllowedDim) {
-                    if (drawW > drawH) {
-                        drawH = Math.round(drawH * (maxAllowedDim / drawW));
-                        drawW = maxAllowedDim;
-                    } else {
-                        drawW = Math.round(drawW * (maxAllowedDim / drawH));
-                        drawH = maxAllowedDim;
-                    }
-                }
-
-                const { canvas, ctx } = getSharedOffscreenCanvas(drawW, drawH);
+                const { canvas, ctx } = getSharedOffscreenCanvas(bitmap.width, bitmap.height);
 
                 const isJpeg = (mimeType && (mimeType.includes('jpeg') || mimeType.includes('jpg')));
                 if (!isJpeg) {
                     ctx.fillStyle = '#FFFFFF';
-                    ctx.fillRect(0, 0, drawW, drawH);
+                    ctx.fillRect(0, 0, bitmap.width, bitmap.height);
                 }
-                ctx.drawImage(bitmap, 0, 0, drawW, drawH);
+                ctx.drawImage(bitmap, 0, 0);
 
                 const jpegBlob = await canvas.convertToBlob({
                     type: 'image/jpeg',
