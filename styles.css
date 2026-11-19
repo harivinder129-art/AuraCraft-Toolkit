@@ -109,14 +109,15 @@ body {
     content: '';
     position: absolute;
     border-radius: var(--radius-full);
-    filter: blur(120px);
     opacity: 0.8;
+    pointer-events: none;
+    transform: translateZ(0);
 }
 
 .glow-bg::before {
     width: 45vw;
     height: 45vw;
-    background-color: var(--orb-color-1);
+    background: radial-gradient(circle, var(--orb-color-1) 0%, transparent 70%);
     top: -10%;
     right: -5%;
 }
@@ -124,7 +125,7 @@ body {
 .glow-bg::after {
     width: 35vw;
     height: 35vw;
-    background-color: var(--orb-color-2);
+    background: radial-gradient(circle, var(--orb-color-2) 0%, transparent 70%);
     bottom: -5%;
     left: -5%;
 }
@@ -694,12 +695,6 @@ body {
 
 .badge-waiting .size-number {
     opacity: 0.55;
-    animation: sizeBadgeWaitingPulse 1.2s ease-in-out infinite alternate;
-}
-
-@keyframes sizeBadgeWaitingPulse {
-    0% { opacity: 0.4; }
-    100% { opacity: 0.85; }
 }
 
 /* Elegant dropdown selectors */

@@ -1102,7 +1102,11 @@ async function processSingleImageFile(file) {
     }
 
     const approxBytes = fileToProcess.size;
-    const thumbUrl = previewUrl;
+    let thumbUrl = previewUrl;
+    try {
+        const microThumb = await createMicroThumbnail(fileToProcess, 160);
+        if (microThumb) thumbUrl = microThumb;
+    } catch (_) { }
 
     const fileRecord = {
         id: Date.now() + Math.random().toString(36).substr(2, 5),
@@ -2429,7 +2433,7 @@ function scheduleSharedCanvasCleanup() {
     }, timeoutMs);
 }
 
-// Persistent DOM Canvas fallback for mobile browsers (iOS Safari / WebKit) using native toBlob
+// Persistent DOM Canvas using native toBlob with zero DOM tree mutation
 let _sharedDomCanvas = null;
 let _sharedDomCtx = null;
 let _sharedDomCleanupTimer = null;
@@ -2440,9 +2444,11 @@ function getSharedDomCanvas(width, height) {
         _sharedDomCleanupTimer = null;
     }
     if (!_sharedDomCanvas) {
-        _sharedDomCanvas = document.createElement('canvas');
-        _sharedDomCanvas.style.display = 'none';
-        document.body.appendChild(_sharedDomCanvas);
+        _sharedDomCanvas = document.getElementById('appCompressionCanvas');
+        if (!_sharedDomCanvas) {
+            _sharedDomCanvas = document.createElement('canvas');
+            _sharedDomCanvas.style.display = 'none';
+        }
         _sharedDomCtx = _sharedDomCanvas.getContext('2d', { willReadFrequently: true }) || _sharedDomCanvas.getContext('2d');
     }
     if (_sharedDomCanvas.width !== width || _sharedDomCanvas.height !== height) {
@@ -2454,18 +2460,13 @@ function getSharedDomCanvas(width, height) {
 
 function scheduleSharedDomCanvasCleanup() {
     if (_sharedDomCleanupTimer) clearTimeout(_sharedDomCleanupTimer);
-    const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const isMobile = typeof navigator !== 'undefined' && (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && window.innerWidth < 1024));
     const timeoutMs = isMobile ? 4000 : 8000;
     _sharedDomCleanupTimer = setTimeout(() => {
         _sharedDomCleanupTimer = null;
         if (_sharedDomCanvas) {
             _sharedDomCanvas.width = 0;
             _sharedDomCanvas.height = 0;
-            if (_sharedDomCanvas.parentNode) {
-                _sharedDomCanvas.parentNode.removeChild(_sharedDomCanvas);
-            }
-            _sharedDomCanvas = null;
-            _sharedDomCtx = null;
         }
     }, timeoutMs);
 }
@@ -2563,14 +2564,11 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
                     return _uint8Array;
                 };
 
-                let initialUrl = '';
-                if (!onlyByteSize) {
-                    initialUrl = await getDataUrl();
-                }
-
+                let _blobUrl = null;
                 return {
                     get url() {
-                        return initialUrl || URL.createObjectURL(jpegBlob);
+                        if (!_blobUrl) _blobUrl = URL.createObjectURL(jpegBlob);
+                        return _blobUrl;
                     },
                     blob: jpegBlob,
                     format: 'JPEG',
@@ -2618,14 +2616,11 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
                     return _uint8Array;
                 };
 
-                let initialUrl = '';
-                if (!onlyByteSize) {
-                    initialUrl = await getDataUrl();
-                }
-
+                let _blobUrl = null;
                 return {
                     get url() {
-                        return initialUrl || URL.createObjectURL(jpegBlob);
+                        if (!_blobUrl) _blobUrl = URL.createObjectURL(jpegBlob);
+                        return _blobUrl;
                     },
                     blob: jpegBlob,
                     format: 'JPEG',
