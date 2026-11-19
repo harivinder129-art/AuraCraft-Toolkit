@@ -2501,99 +2501,35 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
     }
 
     const processingPromise = runCanvasTask(async () => {
-        if (typeof createImageBitmap === 'function' && typeof OffscreenCanvas !== 'undefined') {
+        // Step 1: Pre-warm / reuse decoded ImageBitmap (0ms subsequent draw lag)
+        let bitmap = (fileObj && fileObj._cachedBitmap) ? fileObj._cachedBitmap : null;
+        if (!bitmap && typeof createImageBitmap === 'function') {
             try {
-                // Reuse existing decoded ImageBitmap if available (eliminates 600ms decode lag!)
-                let bitmap = (fileObj && fileObj._cachedBitmap) ? fileObj._cachedBitmap : null;
-                if (!bitmap) {
-                    let blob = null;
-                    if (fileObj && fileObj.file && (fileObj.previewUrl === fileObj.originalPreviewUrl)) {
-                        blob = fileObj.file;
-                    } else if (typeof sourceData === 'string') {
-                        const response = await fetch(sourceData);
-                        blob = await response.blob();
-                    } else {
-                        blob = sourceData;
-                    }
-                    bitmap = await createImageBitmap(blob);
-                    if (fileObj) {
-                        fileObj._cachedBitmap = bitmap;
-                    }
+                let blob = null;
+                if (fileObj && fileObj.file && (fileObj.previewUrl === fileObj.originalPreviewUrl)) {
+                    blob = fileObj.file;
+                } else if (typeof sourceData === 'string') {
+                    const response = await fetch(sourceData);
+                    blob = await response.blob();
+                } else {
+                    blob = sourceData;
                 }
-
-                const { canvas, ctx } = getSharedOffscreenCanvas(bitmap.width, bitmap.height);
-
-                const isJpeg = (mimeType && (mimeType.includes('jpeg') || mimeType.includes('jpg')));
-                if (!isJpeg) {
-                    ctx.fillStyle = '#FFFFFF';
-                    ctx.fillRect(0, 0, bitmap.width, bitmap.height);
+                bitmap = await createImageBitmap(blob);
+                if (fileObj) {
+                    fileObj._cachedBitmap = bitmap;
                 }
-                ctx.drawImage(bitmap, 0, 0);
-
-                const jpegBlob = await canvas.convertToBlob({
-                    type: 'image/jpeg',
-                    quality: quality / 100
-                });
-
-                // Keep texture buffer warm during slider movements; auto-releases after 10s idle
-                scheduleSharedCanvasCleanup();
-
-                // Lazy URL generation: only generate Base64 Data URL if accessed/needed
-                let _dataUrl = null;
-                let _uint8Array = null;
-
-                const getDataUrl = async () => {
-                    if (!_dataUrl) {
-                        _dataUrl = await new Promise((resolve, reject) => {
-                            const reader = new FileReader();
-                            reader.onload = () => resolve(reader.result);
-                            reader.onerror = reject;
-                            reader.readAsDataURL(jpegBlob);
-                        });
-                    }
-                    return _dataUrl;
-                };
-
-                const getUint8Array = async () => {
-                    if (!_uint8Array) {
-                        _uint8Array = new Uint8Array(await jpegBlob.arrayBuffer());
-                    }
-                    return _uint8Array;
-                };
-
-                let initialUrl = '';
-                if (!onlyByteSize) {
-                    initialUrl = await getDataUrl();
-                }
-
-                return {
-                    get url() {
-                        return initialUrl || URL.createObjectURL(jpegBlob);
-                    },
-                    blob: jpegBlob,
-                    format: 'JPEG',
-                    byteSize: jpegBlob.size,
-                    getDataUrl,
-                    getUint8Array
-                };
             } catch (_) { }
         }
 
-        // Fast path 2: Direct DOM Canvas + toBlob fallback (the exact high-speed technique from user's snippet for mobile)
-        try {
-            let bitmap = (fileObj && fileObj._cachedBitmap) ? fileObj._cachedBitmap : null;
-            if (!bitmap && typeof createImageBitmap === 'function') {
-                let blob = (fileObj && fileObj.file && (fileObj.previewUrl === fileObj.originalPreviewUrl))
-                    ? fileObj.file
-                    : (typeof sourceData === 'string' ? await (await fetch(sourceData)).blob() : sourceData);
-                bitmap = await createImageBitmap(blob);
-                if (fileObj) fileObj._cachedBitmap = bitmap;
-            }
+        const width = bitmap ? bitmap.width : (fileObj ? fileObj.width : 0);
+        const height = bitmap ? bitmap.height : (fileObj ? fileObj.height : 0);
 
-            if (bitmap && bitmap.width && bitmap.height) {
-                const { canvas, ctx } = getSharedDomCanvas(bitmap.width, bitmap.height);
+        // Primary Method: Fast Shared DOM Canvas + toBlob with willReadFrequently (Low CPU, 0% GPU spike, exact user snippet method)
+        if (bitmap && width && height) {
+            try {
+                const { canvas, ctx } = getSharedDomCanvas(width, height);
                 ctx.fillStyle = '#FFFFFF';
-                ctx.fillRect(0, 0, bitmap.width, bitmap.height);
+                ctx.fillRect(0, 0, width, height);
                 ctx.drawImage(bitmap, 0, 0);
 
                 const jpegBlob = await new Promise((resolve, reject) => {
@@ -2642,8 +2578,63 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
                     getDataUrl,
                     getUint8Array
                 };
-            }
-        } catch (_) { }
+            } catch (_) { }
+        }
+
+        // Secondary Method: OffscreenCanvas convertToBlob (fallback when DOM canvas is unavailable)
+        if (bitmap && typeof OffscreenCanvas !== 'undefined') {
+            try {
+                const { canvas, ctx } = getSharedOffscreenCanvas(width, height);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(0, 0, width, height);
+                ctx.drawImage(bitmap, 0, 0);
+
+                const jpegBlob = await canvas.convertToBlob({
+                    type: 'image/jpeg',
+                    quality: quality / 100
+                });
+
+                scheduleSharedCanvasCleanup();
+
+                let _dataUrl = null;
+                let _uint8Array = null;
+
+                const getDataUrl = async () => {
+                    if (!_dataUrl) {
+                        _dataUrl = await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onload = () => resolve(reader.result);
+                            reader.onerror = reject;
+                            reader.readAsDataURL(jpegBlob);
+                        });
+                    }
+                    return _dataUrl;
+                };
+
+                const getUint8Array = async () => {
+                    if (!_uint8Array) {
+                        _uint8Array = new Uint8Array(await jpegBlob.arrayBuffer());
+                    }
+                    return _uint8Array;
+                };
+
+                let initialUrl = '';
+                if (!onlyByteSize) {
+                    initialUrl = await getDataUrl();
+                }
+
+                return {
+                    get url() {
+                        return initialUrl || URL.createObjectURL(jpegBlob);
+                    },
+                    blob: jpegBlob,
+                    format: 'JPEG',
+                    byteSize: jpegBlob.size,
+                    getDataUrl,
+                    getUint8Array
+                };
+            } catch (_) { }
+        }
 
         // Ultimate fallback (standard Image element with toBlob)
         return new Promise((resolve, reject) => {
