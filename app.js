@@ -28,6 +28,9 @@ const STATE = {
         watermarkText: ''        // Custom text to stamp diagonally on every page
     }
 };
+if (typeof window !== 'undefined') {
+    window.STATE = STATE;
+}
 
 // DOM Cache Elements
 const DOM = {
@@ -755,16 +758,52 @@ async function createMicroThumbnail(blob, maxSize = 160) {
     }
 }
 
-let _standbyHeicWorker = null;
+let _sharedHeicWorker = null;
+let _sharedHeicWorkerIdleTimer = null;
+let _heicWorkerMsgId = 0;
+const _heicWorkerCallbacks = new Map();
+
+function getOrCreateHeicWorker() {
+    if (_sharedHeicWorkerIdleTimer) {
+        clearTimeout(_sharedHeicWorkerIdleTimer);
+        _sharedHeicWorkerIdleTimer = null;
+    }
+    if (!_sharedHeicWorker) {
+        _sharedHeicWorker = new Worker('heic-worker.js?v=58');
+        _sharedHeicWorker.onmessage = (e) => {
+            const data = e.data;
+            if (!data) return;
+            const cb = _heicWorkerCallbacks.get(data.id);
+            if (cb) {
+                _heicWorkerCallbacks.delete(data.id);
+                cb(null, data);
+            }
+        };
+        _sharedHeicWorker.onerror = (err) => {
+            _heicWorkerCallbacks.forEach(cb => cb(new Error(err && err.message ? err.message : 'HEIC Worker error')));
+            _heicWorkerCallbacks.clear();
+            try { _sharedHeicWorker.terminate(); } catch (_) { }
+            _sharedHeicWorker = null;
+        };
+    }
+    return _sharedHeicWorker;
+}
+
+function scheduleHeicWorkerCleanup() {
+    if (_sharedHeicWorkerIdleTimer) clearTimeout(_sharedHeicWorkerIdleTimer);
+    _sharedHeicWorkerIdleTimer = setTimeout(() => {
+        if (_sharedHeicWorker && _heicWorkerCallbacks.size === 0) {
+            try { _sharedHeicWorker.terminate(); } catch (_) { }
+            _sharedHeicWorker = null;
+        }
+    }, 30000);
+}
 
 function prewarmHeicWorker() {
-    if (_standbyHeicWorker) return;
     try {
-        _standbyHeicWorker = new Worker('heic-worker.js?v=54');
-        _standbyHeicWorker.onerror = () => {
-            try { _standbyHeicWorker.terminate(); } catch (_) { }
-            _standbyHeicWorker = null;
-        };
+        const worker = getOrCreateHeicWorker();
+        worker.postMessage({ type: 'warmup' });
+        scheduleHeicWorkerCleanup();
     } catch (_) { }
 }
 
@@ -779,95 +818,79 @@ if (typeof window !== 'undefined') {
 /**
  * Fast WebAssembly HEIC/HEIF Decoder via Dedicated Web Worker
  * Runs libheif + libde265 compiled to native WebAssembly in an isolated background thread.
- * Optimized with pre-warmed worker pool and zero-copy direct embind decoding.
+ * Optimized with persistent worker pool, eager warmup, and in-worker micro-thumbnail generation.
  */
 function decodeHeicWithWasmWorker(file, quality = 0.82) {
     return new Promise(async (resolve, reject) => {
-        let worker = null;
-        let timeoutId = null;
-
-        const cleanup = () => {
-            if (timeoutId) {
-                clearTimeout(timeoutId);
-                timeoutId = null;
-            }
-            if (worker) {
-                try {
-                    worker.removeEventListener('message', handleMessage);
-                    worker.removeEventListener('error', handleError);
-                    worker.terminate();
-                } catch (_) { }
-                worker = null;
-            }
-        };
-
-        const handleMessage = async (e) => {
-            const data = e.data;
-            if (!data) return;
-            cleanup();
-
-            if (!data.success) {
-                return reject(new Error(data.error || 'WASM HEIC decoding failed'));
-            }
-
-            if (data.blob) {
-                return resolve(data.blob);
-            }
-
-            // In case convertToBlob is not supported in the worker's OffscreenCanvas
-            if (data.rawData) {
-                try {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = data.width;
-                    canvas.height = data.height;
-                    const ctx = canvas.getContext('2d');
-                    const imgData = new ImageData(data.rawData, data.width, data.height);
-                    ctx.putImageData(imgData, 0, 0);
-                    canvas.toBlob((blob) => {
-                        canvas.width = 0;
-                        canvas.height = 0;
-                        if (blob) resolve(blob);
-                        else reject(new Error('Canvas toBlob failed'));
-                    }, 'image/jpeg', quality);
-                } catch (canvasErr) {
-                    reject(canvasErr);
-                }
-                return;
-            }
-
-            reject(new Error('Worker returned empty image data'));
-        };
-
-        const handleError = (err) => {
-            cleanup();
-            reject(new Error(err && err.message ? err.message : 'WASM Worker execution error'));
-        };
-
         try {
             const buffer = await file.arrayBuffer();
+            const worker = getOrCreateHeicWorker();
+            const msgId = ++_heicWorkerMsgId;
 
-            // Use pre-warmed worker to eliminate ~300ms startup and compilation lag
-            if (_standbyHeicWorker) {
-                worker = _standbyHeicWorker;
-                _standbyHeicWorker = null;
-            } else {
-                worker = new Worker('heic-worker.js?v=54');
-            }
-
-            // Schedule fresh standby worker for the next image in background
-            setTimeout(prewarmHeicWorker, 150);
-
-            worker.addEventListener('message', handleMessage);
-            worker.addEventListener('error', handleError);
-
-            timeoutId = setTimeout(() => {
-                cleanup();
+            const timeoutId = setTimeout(() => {
+                _heicWorkerCallbacks.delete(msgId);
                 reject(new Error('WASM HEIC worker timed out (45s)'));
+                scheduleHeicWorkerCleanup();
             }, 45000);
 
-            worker.postMessage({ id: 1, buffer, quality }, [buffer]);
+            _heicWorkerCallbacks.set(msgId, (err, data) => {
+                clearTimeout(timeoutId);
+                scheduleHeicWorkerCleanup();
+                if (err) return reject(err);
+                if (!data || !data.success) {
+                    return reject(new Error((data && data.error) || 'WASM HEIC decoding failed'));
+                }
+
+                if (data.blob) {
+                    return resolve({
+                        blob: data.blob,
+                        thumbBlob: data.thumbBlob || null,
+                        width: data.width,
+                        height: data.height
+                    });
+                }
+
+                // In case convertToBlob is not supported in the worker's OffscreenCanvas
+                if (data.rawData) {
+                    try {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = data.width;
+                        canvas.height = data.height;
+                        const ctx = canvas.getContext('2d');
+                        const imgData = new ImageData(data.rawData, data.width, data.height);
+                        ctx.putImageData(imgData, 0, 0);
+
+                        let thumbBlob = null;
+                        try {
+                            const scale = Math.min(1, 160 / Math.max(data.width, data.height));
+                            const tw = Math.max(1, Math.round(data.width * scale));
+                            const th = Math.max(1, Math.round(data.height * scale));
+                            const tc = document.createElement('canvas');
+                            tc.width = tw;
+                            tc.height = th;
+                            const tctx = tc.getContext('2d');
+                            tctx.drawImage(canvas, 0, 0, tw, th);
+                            tc.toBlob(tb => { thumbBlob = tb; tc.width = 0; tc.height = 0; }, 'image/jpeg', 0.75);
+                        } catch (_) { }
+
+                        canvas.toBlob((blob) => {
+                            canvas.width = 0;
+                            canvas.height = 0;
+                            if (blob) resolve({ blob, thumbBlob, width: data.width, height: data.height });
+                            else reject(new Error('Canvas toBlob failed'));
+                        }, 'image/jpeg', quality);
+                    } catch (canvasErr) {
+                        reject(canvasErr);
+                    }
+                    return;
+                }
+
+                reject(new Error('Worker returned empty image data'));
+            });
+
+            worker.postMessage({ id: msgId, buffer, quality, generateThumb: true }, [buffer]);
         } catch (setupErr) {
-            cleanup();
+            scheduleHeicWorkerCleanup();
             reject(setupErr);
         }
     });
@@ -955,11 +978,24 @@ function decodeHeicWithMainThreadWasm(buffer, quality = 0.82) {
             }
             decoder = null;
 
+            let thumbBlob = null;
+            try {
+                const scale = Math.min(1, 160 / Math.max(width, height));
+                const tw = Math.max(1, Math.round(width * scale));
+                const th = Math.max(1, Math.round(height * scale));
+                const tc = document.createElement('canvas');
+                tc.width = tw;
+                tc.height = th;
+                const tctx = tc.getContext('2d');
+                tctx.drawImage(canvas, 0, 0, tw, th);
+                await new Promise(r => tc.toBlob(b => { thumbBlob = b; tc.width = 0; tc.height = 0; r(); }, 'image/jpeg', 0.75));
+            } catch (_) { }
+
             return await new Promise((resolve, reject) => {
                 canvas.toBlob((blob) => {
                     canvas.width = 0;
                     canvas.height = 0;
-                    if (blob) resolve(blob);
+                    if (blob) resolve({ blob, thumbBlob, width, height });
                     else reject(new Error('Canvas toBlob failed'));
                 }, 'image/jpeg', quality);
             });
@@ -987,6 +1023,8 @@ function decodeHeicWithMainThreadWasm(buffer, quality = 0.82) {
 async function processSingleImageFile(file) {
     let fileToProcess = file;
     let resolvedType = file.type;
+    let heicDims = null;
+    let heicThumbBlob = null;
     const ext = file.name ? file.name.split('.').pop().toLowerCase() : '';
     const isHeic = ext === 'heic' || ext === 'heif' || (resolvedType && (resolvedType.includes('heic') || resolvedType.includes('heif')));
 
@@ -999,28 +1037,58 @@ async function processSingleImageFile(file) {
         try {
             const bmp = await createImageBitmap(file);
             if (bmp && bmp.width > 0 && bmp.height > 0) {
+                const w = bmp.width;
+                const h = bmp.height;
                 const oc = typeof OffscreenCanvas !== 'undefined'
-                    ? new OffscreenCanvas(bmp.width, bmp.height)
+                    ? new OffscreenCanvas(w, h)
                     : document.createElement('canvas');
-                oc.width = bmp.width;
-                oc.height = bmp.height;
+                oc.width = w;
+                oc.height = h;
                 const ctx = oc.getContext('2d');
                 ctx.drawImage(bmp, 0, 0);
+
+                let thumbBlob = null;
+                try {
+                    const scale = Math.min(1, 160 / Math.max(w, h));
+                    const tw = Math.max(1, Math.round(w * scale));
+                    const th = Math.max(1, Math.round(h * scale));
+                    const tc = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(tw, th) : document.createElement('canvas');
+                    tc.width = tw;
+                    tc.height = th;
+                    const tctx = tc.getContext('2d');
+                    tctx.drawImage(oc, 0, 0, tw, th);
+                    if (tc.convertToBlob) thumbBlob = await tc.convertToBlob({ type: 'image/jpeg', quality: 0.75 });
+                    else if (tc.toBlob) thumbBlob = await new Promise(r => tc.toBlob(r, 'image/jpeg', 0.75));
+                    tc.width = 0;
+                    tc.height = 0;
+                } catch (_) { }
+
                 bmp.close();
                 if (oc.convertToBlob) {
                     convertedBlob = await oc.convertToBlob({ type: 'image/jpeg', quality: 0.85 });
                 } else if (oc.toBlob) {
                     convertedBlob = await new Promise(r => oc.toBlob(r, 'image/jpeg', 0.85));
                 }
-                if (convertedBlob) isHeicConverted = true;
+                oc.width = 0;
+                oc.height = 0;
+                if (convertedBlob) {
+                    isHeicConverted = true;
+                    heicDims = { width: w, height: h };
+                    heicThumbBlob = thumbBlob;
+                }
             }
         } catch (_) { }
 
         // Tier 1: Dedicated Off-Main-Thread WebAssembly Worker
         if (!isHeicConverted) {
             try {
-                convertedBlob = await decodeHeicWithWasmWorker(file, 0.82);
-                if (convertedBlob) isHeicConverted = true;
+                const res = await decodeHeicWithWasmWorker(file, 0.82);
+                if (res && res.blob) {
+                    convertedBlob = res.blob;
+                    heicDims = { width: res.width, height: res.height };
+                    heicThumbBlob = res.thumbBlob || null;
+                    isHeicConverted = true;
+                }
             } catch (wasmWorkerErr) {
                 console.warn('[HEIC] Dedicated WASM worker unavailable, falling back:', wasmWorkerErr);
             }
@@ -1030,8 +1098,13 @@ async function processSingleImageFile(file) {
         if (!isHeicConverted) {
             try {
                 const buf = await file.arrayBuffer();
-                convertedBlob = await decodeHeicWithMainThreadWasm(buf, 0.82);
-                if (convertedBlob) isHeicConverted = true;
+                const res = await decodeHeicWithMainThreadWasm(buf, 0.82);
+                if (res && res.blob) {
+                    convertedBlob = res.blob;
+                    heicDims = { width: res.width, height: res.height };
+                    heicThumbBlob = res.thumbBlob || null;
+                    isHeicConverted = true;
+                }
             } catch (wasmMainErr) {
                 console.warn('[HEIC] Main-thread WASM decode unavailable, falling back to heic-to.js:', wasmMainErr);
             }
@@ -1085,14 +1158,17 @@ async function processSingleImageFile(file) {
 
     const previewUrl = URL.createObjectURL(fileToProcess);
 
-    // <1ms binary header dimension reader (avoids full 24MP bitmap decode)
-    let dims = await getFastImageDimensions(fileToProcess, previewUrl);
+    // Fast dimensions: If already resolved from HEIC, bypass re-decoding
+    let dims = heicDims;
     if (!dims) {
-        try {
-            const bmp = await createImageBitmap(fileToProcess);
-            dims = { width: bmp.width, height: bmp.height };
-            bmp.close();
-        } catch (_) { }
+        dims = await getFastImageDimensions(fileToProcess, previewUrl);
+        if (!dims) {
+            try {
+                const bmp = await createImageBitmap(fileToProcess);
+                dims = { width: bmp.width, height: bmp.height };
+                bmp.close();
+            } catch (_) { }
+        }
     }
 
     if (!dims) {
@@ -1103,10 +1179,14 @@ async function processSingleImageFile(file) {
 
     const approxBytes = fileToProcess.size;
     let thumbUrl = previewUrl;
-    try {
-        const microThumb = await createMicroThumbnail(fileToProcess, 160);
-        if (microThumb) thumbUrl = microThumb;
-    } catch (_) { }
+    if (heicThumbBlob) {
+        thumbUrl = URL.createObjectURL(heicThumbBlob);
+    } else {
+        try {
+            const microThumb = await createMicroThumbnail(fileToProcess, 160);
+            if (microThumb) thumbUrl = microThumb;
+        } catch (_) { }
+    }
 
     const fileRecord = {
         id: Date.now() + Math.random().toString(36).substr(2, 5),
@@ -1205,8 +1285,9 @@ async function processFiles(files) {
 
     try {
         const hardwareConcurrency = navigator.hardwareConcurrency || 4;
+        const isMobile = typeof navigator !== 'undefined' && (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && window.innerWidth < 1024));
         const fileConcurrency = hasHeicOrPdf
-            ? Math.min(3, Math.max(2, hardwareConcurrency - 1))
+            ? (isMobile ? 1 : Math.min(2, Math.max(1, hardwareConcurrency - 1)))
             : Math.max(4, Math.min(8, hardwareConcurrency));
 
         const resultsArray = await runParallelPool(validFiles, async (file) => {
@@ -1251,6 +1332,7 @@ async function processFiles(files) {
         }
     }
 }
+if (typeof window !== 'undefined') window.processFiles = processFiles;
 
 function formatFileSize(bytes) {
     if (bytes === 0) return '0 Bytes';
@@ -2356,8 +2438,8 @@ async function compilePDFDocument(progressCallback, cancellationToken = null, fo
         if (progressCallback) await progressCallback(count, count);
         return { docs, blobs, size: totalSize };
     }
-
 }
+if (typeof window !== 'undefined') window.compilePDFDocument = compilePDFDocument;
 function applyWatermark(doc, pageConfig, text) {
     doc.setTextColor(150, 150, 150);
     doc.setFontSize(42);
