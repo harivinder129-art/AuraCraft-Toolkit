@@ -13,7 +13,7 @@ let libheifModule = null;
 function getLibheif() {
     if (!libheifModule) {
         if (typeof libheif === 'undefined' && typeof self.libheif === 'undefined') {
-            importScripts('libheif-bundle.js?v=59');
+            importScripts('libheif-bundle.js?v=60');
         }
         const factory = typeof libheif !== 'undefined' ? libheif : self.libheif;
         if (typeof factory !== 'function') {

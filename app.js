@@ -762,7 +762,7 @@ async function createMicroThumbnail(blob, maxSize = 160) {
 // Supports minimum 2 parallel conversions on both PC & Mobile, scaling up to hardware power
 class HeicWorkerItem {
     constructor() {
-        this.worker = new Worker('heic-worker.js?v=59');
+        this.worker = new Worker('heic-worker.js?v=60');
         this.busy = false;
         this.currentResolve = null;
         this.currentReject = null;
@@ -860,9 +860,45 @@ const _heicJobQueue = [];
 let _heicPoolIdleTimer = null;
 let _heicWorkerMsgId = 0;
 
+/**
+ * Evaluates real hardware power for heavy HEIC conversion.
+ * Balances CPU cores AND device RAM (navigator.deviceMemory) to prevent out-of-memory crashes.
+ * Guarantees minimum 2 parallel conversions on both PC & Mobile, scaling up only when RAM and thermals allow.
+ */
+function getTrueHardwarePowerForHeic() {
+    const cores = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+    const isMobile = typeof navigator !== 'undefined' && (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && window.innerWidth < 1024));
+    const ram = (typeof navigator !== 'undefined' && navigator.deviceMemory) || 4; // RAM in GB
+
+    let safePower = 2; // Guaranteed minimum parallel on all devices
+
+    if (isMobile) {
+        // Mobile tab memory limits are strictly capped (~800MB - 1GB).
+        // Only high-end flagship phones (8+ cores AND 6GB+ RAM) can safely run 3 HEIC decodes.
+        // Budget 8-core phones with low RAM (<=4GB) are capped at 2 parallel to prevent OOM tab crash.
+        if (cores >= 8 && ram >= 6) {
+            safePower = 3;
+        } else {
+            safePower = 2;
+        }
+    } else {
+        // Desktop / Laptop PCs with high RAM and active cooling
+        if (cores >= 12 && ram >= 16) {
+            safePower = 6;
+        } else if (cores >= 8 && ram >= 8) {
+            safePower = 4;
+        } else if (cores >= 6 && ram >= 6) {
+            safePower = 3;
+        } else {
+            safePower = 2;
+        }
+    }
+
+    return safePower;
+}
+
 function getMaxHeicWorkers() {
-    const hw = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
-    return Math.max(2, hw);
+    return getTrueHardwarePowerForHeic();
 }
 
 function scheduleHeicPoolCleanup() {
@@ -1377,10 +1413,9 @@ async function processFiles(files) {
     }
 
     try {
-        const hardwarePower = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
         const fileConcurrency = hasHeicOrPdf
-            ? Math.max(2, hardwarePower)
-            : Math.max(4, Math.min(8, hardwarePower));
+            ? getTrueHardwarePowerForHeic()
+            : Math.max(4, Math.min(8, (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4));
 
         const resultsArray = await runParallelPool(validFiles, async (file) => {
             const ext = file.name ? file.name.split('.').pop().toLowerCase() : '';
