@@ -758,53 +758,156 @@ async function createMicroThumbnail(blob, maxSize = 160) {
     }
 }
 
-let _sharedHeicWorker = null;
-let _sharedHeicWorkerIdleTimer = null;
-let _heicWorkerMsgId = 0;
-const _heicWorkerCallbacks = new Map();
+// Dynamic Multi-Threaded HEIC Worker Pool
+// Supports minimum 2 parallel conversions on both PC & Mobile, scaling up to hardware power
+class HeicWorkerItem {
+    constructor() {
+        this.worker = new Worker('heic-worker.js?v=59');
+        this.busy = false;
+        this.currentResolve = null;
+        this.currentReject = null;
+        this.currentTimeout = null;
 
-function getOrCreateHeicWorker() {
-    if (_sharedHeicWorkerIdleTimer) {
-        clearTimeout(_sharedHeicWorkerIdleTimer);
-        _sharedHeicWorkerIdleTimer = null;
-    }
-    if (!_sharedHeicWorker) {
-        _sharedHeicWorker = new Worker('heic-worker.js?v=58');
-        _sharedHeicWorker.onmessage = (e) => {
+        this.worker.onmessage = (e) => {
             const data = e.data;
-            if (!data) return;
-            const cb = _heicWorkerCallbacks.get(data.id);
-            if (cb) {
-                _heicWorkerCallbacks.delete(data.id);
-                cb(null, data);
+            if (data && data.type === 'warmed') {
+                return;
+            }
+            if (this.currentTimeout) {
+                clearTimeout(this.currentTimeout);
+                this.currentTimeout = null;
+            }
+            const resolve = this.currentResolve;
+            const reject = this.currentReject;
+            this.currentResolve = null;
+            this.currentReject = null;
+            this.busy = false;
+
+            processNextHeicJob();
+
+            if (resolve) {
+                if (!data || !data.success) {
+                    reject(new Error((data && data.error) || 'WASM HEIC decoding failed'));
+                } else {
+                    resolve(data);
+                }
             }
         };
-        _sharedHeicWorker.onerror = (err) => {
-            _heicWorkerCallbacks.forEach(cb => cb(new Error(err && err.message ? err.message : 'HEIC Worker error')));
-            _heicWorkerCallbacks.clear();
-            try { _sharedHeicWorker.terminate(); } catch (_) { }
-            _sharedHeicWorker = null;
+
+        this.worker.onerror = (err) => {
+            if (this.currentTimeout) {
+                clearTimeout(this.currentTimeout);
+                this.currentTimeout = null;
+            }
+            const reject = this.currentReject;
+            this.currentResolve = null;
+            this.currentReject = null;
+            this.busy = false;
+
+            try { this.worker.terminate(); } catch (_) { }
+            const idx = _heicWorkers.indexOf(this);
+            if (idx !== -1) _heicWorkers.splice(idx, 1);
+
+            processNextHeicJob();
+
+            if (reject) {
+                reject(new Error(err && err.message ? err.message : 'HEIC Worker error'));
+            }
         };
     }
-    return _sharedHeicWorker;
+
+    warmup() {
+        try {
+            this.worker.postMessage({ type: 'warmup' });
+        } catch (_) { }
+    }
+
+    terminate() {
+        try {
+            this.worker.terminate();
+        } catch (_) { }
+    }
+
+    execute(job) {
+        this.busy = true;
+        this.currentResolve = job.resolve;
+        this.currentReject = job.reject;
+        this.currentTimeout = setTimeout(() => {
+            if (this.currentReject) {
+                const rej = this.currentReject;
+                this.currentResolve = null;
+                this.currentReject = null;
+                this.busy = false;
+                try { this.worker.terminate(); } catch (_) { }
+                const idx = _heicWorkers.indexOf(this);
+                if (idx !== -1) _heicWorkers.splice(idx, 1);
+                processNextHeicJob();
+                rej(new Error('WASM HEIC worker timed out (45s)'));
+            }
+        }, 45000);
+
+        this.worker.postMessage({
+            id: job.id,
+            buffer: job.buffer,
+            quality: job.quality,
+            generateThumb: true
+        }, [job.buffer]);
+    }
 }
 
-function scheduleHeicWorkerCleanup() {
-    if (_sharedHeicWorkerIdleTimer) clearTimeout(_sharedHeicWorkerIdleTimer);
-    _sharedHeicWorkerIdleTimer = setTimeout(() => {
-        if (_sharedHeicWorker && _heicWorkerCallbacks.size === 0) {
-            try { _sharedHeicWorker.terminate(); } catch (_) { }
-            _sharedHeicWorker = null;
+const _heicWorkers = [];
+const _heicJobQueue = [];
+let _heicPoolIdleTimer = null;
+let _heicWorkerMsgId = 0;
+
+function getMaxHeicWorkers() {
+    const hw = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
+    return Math.max(2, hw);
+}
+
+function scheduleHeicPoolCleanup() {
+    if (_heicPoolIdleTimer) clearTimeout(_heicPoolIdleTimer);
+    _heicPoolIdleTimer = setTimeout(() => {
+        // Retain at least 2 standby workers during idle so subsequent drops have 0ms latency
+        while (_heicWorkers.length > 2) {
+            const idx = _heicWorkers.findIndex(w => !w.busy);
+            if (idx === -1) break;
+            const [w] = _heicWorkers.splice(idx, 1);
+            w.terminate();
         }
     }, 30000);
 }
 
 function prewarmHeicWorker() {
     try {
-        const worker = getOrCreateHeicWorker();
-        worker.postMessage({ type: 'warmup' });
-        scheduleHeicWorkerCleanup();
+        // Pre-warm minimum 2 parallel workers on startup (PC & Mobile)
+        while (_heicWorkers.length < 2) {
+            const item = new HeicWorkerItem();
+            item.warmup();
+            _heicWorkers.push(item);
+        }
+        scheduleHeicPoolCleanup();
     } catch (_) { }
+}
+
+function processNextHeicJob() {
+    if (_heicJobQueue.length === 0) {
+        scheduleHeicPoolCleanup();
+        return;
+    }
+
+    let idleWorker = _heicWorkers.find(w => !w.busy);
+
+    if (!idleWorker && _heicWorkers.length < getMaxHeicWorkers()) {
+        idleWorker = new HeicWorkerItem();
+        idleWorker.warmup();
+        _heicWorkers.push(idleWorker);
+    }
+
+    if (!idleWorker) return;
+
+    const job = _heicJobQueue.shift();
+    idleWorker.execute(job);
 }
 
 if (typeof window !== 'undefined') {
@@ -816,81 +919,71 @@ if (typeof window !== 'undefined') {
 }
 
 /**
- * Fast WebAssembly HEIC/HEIF Decoder via Dedicated Web Worker
- * Runs libheif + libde265 compiled to native WebAssembly in an isolated background thread.
- * Optimized with persistent worker pool, eager warmup, and in-worker micro-thumbnail generation.
+ * Fast WebAssembly HEIC/HEIF Decoder via Dedicated Web Worker Pool
+ * Minimum 2 parallel decoders in PC & Mobile, scaling up to hardware power.
  */
 function decodeHeicWithWasmWorker(file, quality = 0.82) {
     return new Promise(async (resolve, reject) => {
         try {
             const buffer = await file.arrayBuffer();
-            const worker = getOrCreateHeicWorker();
             const msgId = ++_heicWorkerMsgId;
 
-            const timeoutId = setTimeout(() => {
-                _heicWorkerCallbacks.delete(msgId);
-                reject(new Error('WASM HEIC worker timed out (45s)'));
-                scheduleHeicWorkerCleanup();
-            }, 45000);
-
-            _heicWorkerCallbacks.set(msgId, (err, data) => {
-                clearTimeout(timeoutId);
-                scheduleHeicWorkerCleanup();
-                if (err) return reject(err);
-                if (!data || !data.success) {
-                    return reject(new Error((data && data.error) || 'WASM HEIC decoding failed'));
-                }
-
-                if (data.blob) {
-                    return resolve({
-                        blob: data.blob,
-                        thumbBlob: data.thumbBlob || null,
-                        width: data.width,
-                        height: data.height
-                    });
-                }
-
-                // In case convertToBlob is not supported in the worker's OffscreenCanvas
-                if (data.rawData) {
-                    try {
-                        const canvas = document.createElement('canvas');
-                        canvas.width = data.width;
-                        canvas.height = data.height;
-                        const ctx = canvas.getContext('2d');
-                        const imgData = new ImageData(data.rawData, data.width, data.height);
-                        ctx.putImageData(imgData, 0, 0);
-
-                        let thumbBlob = null;
-                        try {
-                            const scale = Math.min(1, 160 / Math.max(data.width, data.height));
-                            const tw = Math.max(1, Math.round(data.width * scale));
-                            const th = Math.max(1, Math.round(data.height * scale));
-                            const tc = document.createElement('canvas');
-                            tc.width = tw;
-                            tc.height = th;
-                            const tctx = tc.getContext('2d');
-                            tctx.drawImage(canvas, 0, 0, tw, th);
-                            tc.toBlob(tb => { thumbBlob = tb; tc.width = 0; tc.height = 0; }, 'image/jpeg', 0.75);
-                        } catch (_) { }
-
-                        canvas.toBlob((blob) => {
-                            canvas.width = 0;
-                            canvas.height = 0;
-                            if (blob) resolve({ blob, thumbBlob, width: data.width, height: data.height });
-                            else reject(new Error('Canvas toBlob failed'));
-                        }, 'image/jpeg', quality);
-                    } catch (canvasErr) {
-                        reject(canvasErr);
+            _heicJobQueue.push({
+                id: msgId,
+                buffer,
+                quality,
+                resolve: (data) => {
+                    if (data.blob) {
+                        return resolve({
+                            blob: data.blob,
+                            thumbBlob: data.thumbBlob || null,
+                            width: data.width,
+                            height: data.height
+                        });
                     }
-                    return;
-                }
 
-                reject(new Error('Worker returned empty image data'));
+                    // Fallback for rawData if OffscreenCanvas not supported in worker
+                    if (data.rawData) {
+                        try {
+                            const canvas = document.createElement('canvas');
+                            canvas.width = data.width;
+                            canvas.height = data.height;
+                            const ctx = canvas.getContext('2d');
+                            const imgData = new ImageData(data.rawData, data.width, data.height);
+                            ctx.putImageData(imgData, 0, 0);
+
+                            let thumbBlob = null;
+                            try {
+                                const scale = Math.min(1, 160 / Math.max(data.width, data.height));
+                                const tw = Math.max(1, Math.round(data.width * scale));
+                                const th = Math.max(1, Math.round(data.height * scale));
+                                const tc = document.createElement('canvas');
+                                tc.width = tw;
+                                tc.height = th;
+                                const tctx = tc.getContext('2d');
+                                tctx.drawImage(canvas, 0, 0, tw, th);
+                                tc.toBlob(tb => { thumbBlob = tb; tc.width = 0; tc.height = 0; }, 'image/jpeg', 0.75);
+                            } catch (_) { }
+
+                            canvas.toBlob((blob) => {
+                                canvas.width = 0;
+                                canvas.height = 0;
+                                if (blob) resolve({ blob, thumbBlob, width: data.width, height: data.height });
+                                else reject(new Error('Canvas toBlob failed'));
+                            }, 'image/jpeg', quality);
+                        } catch (canvasErr) {
+                            reject(canvasErr);
+                        }
+                        return;
+                    }
+
+                    reject(new Error('Worker returned empty image data'));
+                },
+                reject: (err) => reject(err)
             });
 
-            worker.postMessage({ id: msgId, buffer, quality, generateThumb: true }, [buffer]);
+            processNextHeicJob();
         } catch (setupErr) {
-            scheduleHeicWorkerCleanup();
             reject(setupErr);
         }
     });
@@ -1284,11 +1377,10 @@ async function processFiles(files) {
     }
 
     try {
-        const hardwareConcurrency = navigator.hardwareConcurrency || 4;
-        const isMobile = typeof navigator !== 'undefined' && (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && window.innerWidth < 1024));
+        const hardwarePower = (typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4;
         const fileConcurrency = hasHeicOrPdf
-            ? (isMobile ? 1 : Math.min(2, Math.max(1, hardwareConcurrency - 1)))
-            : Math.max(4, Math.min(8, hardwareConcurrency));
+            ? Math.max(2, hardwarePower)
+            : Math.max(4, Math.min(8, hardwarePower));
 
         const resultsArray = await runParallelPool(validFiles, async (file) => {
             const ext = file.name ? file.name.split('.').pop().toLowerCase() : '';
