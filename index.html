@@ -311,7 +311,8 @@
             <div class="sticky-actions-group">
                 <!-- 1st: Export PDF Group (Separate PDFs / Single PDF) -->
                 <div class="sticky-dropdown-wrapper" id="stickyPdfDropdown">
-                    <button type="button" class="btn btn-primary sticky-action-btn" id="btnStickyExportPdf" disabled aria-expanded="false" aria-haspopup="true">
+                    <button type="button" class="btn btn-primary sticky-action-btn" id="btnStickyExportPdf" disabled
+                        aria-expanded="false" aria-haspopup="true">
                         <i data-lucide="file-down"></i>
                         <span class="btn-text-label">Export PDF</span>
                         <i data-lucide="chevron-up" class="chevron-indicator"></i>
@@ -322,7 +323,8 @@
                             <span>PDF Export Options</span>
                         </div>
                         <div class="sticky-menu-items">
-                            <button type="button" class="sticky-menu-btn" id="btnStickySeparatePdf" title="Export each page as an individual PDF">
+                            <button type="button" class="sticky-menu-btn" id="btnStickySeparatePdf"
+                                title="Export each page as an individual PDF">
                                 <div class="menu-btn-icon">
                                     <i data-lucide="copy"></i>
                                 </div>
@@ -331,7 +333,8 @@
                                     <span class="menu-btn-subtitle">Download each page as its own PDF</span>
                                 </div>
                             </button>
-                            <button type="button" class="sticky-menu-btn" id="btnStickySinglePdf" title="Combine all pages into one PDF document">
+                            <button type="button" class="sticky-menu-btn" id="btnStickySinglePdf"
+                                title="Combine all pages into one PDF document">
                                 <div class="menu-btn-icon">
                                     <i data-lucide="book-open"></i>
                                 </div>
@@ -346,7 +349,8 @@
 
                 <!-- 2nd: Save Images Group (Separate Images & Zip Images) -->
                 <div class="sticky-dropdown-wrapper" id="stickyImgDropdown">
-                    <button type="button" class="btn btn-secondary sticky-action-btn sticky-images-trigger" id="btnStickySaveImages" disabled aria-expanded="false" aria-haspopup="true">
+                    <button type="button" class="btn btn-secondary sticky-action-btn sticky-images-trigger"
+                        id="btnStickySaveImages" disabled aria-expanded="false" aria-haspopup="true">
                         <i data-lucide="image-down"></i>
                         <span class="btn-text-label">Save Images</span>
                         <i data-lucide="chevron-up" class="chevron-indicator"></i>
@@ -357,7 +361,8 @@
                             <span>Image Save Options</span>
                         </div>
                         <div class="sticky-menu-items">
-                            <button type="button" class="sticky-menu-btn" id="btnStickySeparateImages" title="Download all images as separate files">
+                            <button type="button" class="sticky-menu-btn" id="btnStickySeparateImages"
+                                title="Download all images as separate files">
                                 <div class="menu-btn-icon">
                                     <i data-lucide="image"></i>
                                 </div>
@@ -366,7 +371,8 @@
                                     <span class="menu-btn-subtitle">Download each image individually</span>
                                 </div>
                             </button>
-                            <button type="button" class="sticky-menu-btn" id="btnStickyZipImages" title="Download all images packaged in a .zip archive">
+                            <button type="button" class="sticky-menu-btn" id="btnStickyZipImages"
+                                title="Download all images packaged in a .zip archive">
                                 <div class="menu-btn-icon">
                                     <i data-lucide="archive"></i>
                                 </div>
@@ -517,8 +523,10 @@
                 </div>
 
                 <div class="edit-main-area">
-                    <button type="button" class="fullscreen-close-btn" id="exitFullScreenCrop" aria-label="Close Full View" title="Exit Full View">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <button type="button" class="fullscreen-close-btn" id="exitFullScreenCrop"
+                        aria-label="Close Full View" title="Exit Full View">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                             <line x1="18" y1="6" x2="6" y2="18"></line>
                             <line x1="6" y1="6" x2="18" y2="18"></line>
                         </svg>
@@ -556,9 +564,12 @@
                     </div>
 
                     <div class="crop-actions mt-4" style="justify-content: flex-end;">
-                        <button type="button" class="btn btn-secondary" id="toggleFullScreenEdit" title="Full Screen Crop"><i data-lucide="maximize" style="width: 16px; height: 16px;"></i> Full View</button>
+                        <button type="button" class="btn btn-secondary" id="toggleFullScreenEdit"
+                            title="Full Screen Crop"><i data-lucide="maximize" style="width: 16px; height: 16px;"></i>
+                            Full View</button>
                         <button type="button" class="btn btn-secondary" id="btnCancelEdit">Cancel</button>
-                        <button type="button" class="btn btn-primary btn-glow-active" id="btnApplyEdit">Apply Edits</button>
+                        <button type="button" class="btn btn-primary btn-glow-active" id="btnApplyEdit">Apply
+                            Edits</button>
                     </div>
                 </div>
             </div>
@@ -569,7 +580,7 @@
     <canvas id="appCompressionCanvas" style="display:none;"></canvas>
 
     <!-- App JavaScript -->
-    <script src="app.js?v=60"></script>
+    <script src="app.js?v=61"></script>
 </body>
 
 </html>

@@ -884,10 +884,12 @@ function getTrueHardwarePowerForHeic() {
     } else {
         // Desktop / Laptop PCs with high RAM and active cooling
         if (cores >= 12 && ram >= 16) {
-            safePower = 6;
+            safePower = 8;
         } else if (cores >= 8 && ram >= 8) {
+            safePower = 6;
+        } else if (cores >= 6 && ram >= 8) {
             safePower = 4;
-        } else if (cores >= 6 && ram >= 6) {
+        } else if (cores >= 2 && ram >= 6) {
             safePower = 3;
         } else {
             safePower = 2;
@@ -1144,7 +1146,7 @@ function decodeHeicWithMainThreadWasm(buffer, quality = 0.82) {
     };
 
     const task = _mainThreadWasmLock.then(run, run);
-    _mainThreadWasmLock = task.catch(() => {});
+    _mainThreadWasmLock = task.catch(() => { });
     return task;
 }
 
@@ -1441,12 +1443,7 @@ async function processFiles(files) {
             }
             updateUIState();
 
-            // Background pre-warming of image bitmaps during idle time for instant 0ms slider response
-            if (typeof requestIdleCallback === 'function') {
-                requestIdleCallback(() => allRecords.forEach(prewarmFileBitmap));
-            } else {
-                setTimeout(() => allRecords.forEach(prewarmFileBitmap), 100);
-            }
+            // Bitmaps are decoded on-demand or just-in-time on slider touch/hover to prevent bulk memory spikes
         }
     } finally {
         DOM.fileInput.value = '';
@@ -1476,7 +1473,7 @@ function prewarmFileBitmap(fileObj) {
     if (isMobile) {
         STATE.files.forEach(f => {
             if (f !== fileObj && f._cachedBitmap) {
-                try { f._cachedBitmap.close(); } catch (_) {}
+                try { f._cachedBitmap.close(); } catch (_) { }
                 f._cachedBitmap = null;
             }
         });
@@ -1485,15 +1482,15 @@ function prewarmFileBitmap(fileObj) {
         if (fileObj.file) {
             createImageBitmap(fileObj.file).then(bmp => {
                 if (!fileObj._cachedBitmap) fileObj._cachedBitmap = bmp;
-            }).catch(() => {});
+            }).catch(() => { });
         } else if (fileObj.previewUrl) {
             fetch(fileObj.previewUrl).then(r => r.blob()).then(b => {
                 return createImageBitmap(b);
             }).then(bmp => {
                 if (!fileObj._cachedBitmap) fileObj._cachedBitmap = bmp;
-            }).catch(() => {});
+            }).catch(() => { });
         }
-    } catch (_) {}
+    } catch (_) { }
 }
 
 function updateSizeBadge(badge, label, bytes) {
