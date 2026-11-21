@@ -2097,11 +2097,23 @@ async function exportSeparatePDFs() {
         if (compiledResult && compiledResult.docs) {
             const total = compiledResult.docs.length;
             for (let i = 0; i < total; i++) {
-                const imgData = STATE.files[i];
+                const imgData = STATE.files[i] || {};
                 const cleanName = (imgData.name || `page_${i + 1}`).replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').trim().replace(/\s+/g, "_") || `page_${i + 1}`;
                 const fileName = total > 1 ? `${cleanName}_page_${i + 1}.pdf` : `${cleanName}_converted.pdf`;
                 updateStickyProgress(true, `Saving PDF ${i + 1} of ${total}...`);
-                compiledResult.docs[i].save(fileName);
+
+                const blob = (compiledResult.blobs && compiledResult.blobs[i])
+                    ? compiledResult.blobs[i]
+                    : compiledResult.docs[i].output('blob');
+                const blobUrl = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = blobUrl;
+                link.download = fileName;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+
                 if (i < total - 1) {
                     await delay(350);
                 }
@@ -2441,7 +2453,8 @@ async function compilePDFDocument(progressCallback, cancellationToken = null, fo
 
             let imageSource = processedImage.url;
             if (processedImage.getUint8Array) {
-                imageSource = await processedImage.getUint8Array();
+                const arr = await processedImage.getUint8Array();
+                if (arr) imageSource = arr;
             } else if (processedImage.blob) {
                 imageSource = new Uint8Array(await processedImage.blob.arrayBuffer());
             }
@@ -2475,31 +2488,14 @@ async function compilePDFDocument(progressCallback, cancellationToken = null, fo
             const imgData = STATE.files[i];
             const quality = imgData.quality || 100;
 
-            let processedUrl = null;
-            let processedFormat = (imgData.type && imgData.type.includes('png')) ? 'PNG' : 'JPEG';
-
-            // Check if slider already compressed this in cache
-            const qualityCache = qualityRatioCache.get(imgData.previewUrl || imgData.dataUrl);
-            const cacheKey = `${quality}|${imgData.type}`;
-
-            if (quality === 100) {
-                processedUrl = imgData.previewUrl || imgData.dataUrl;
-            } else if (qualityCache && qualityCache.has(cacheKey)) {
-                const cached = await qualityCache.get(cacheKey);
-                processedUrl = cached.url;
-                processedFormat = cached.format || 'JPEG';
-            } else {
-                const processed = await processQualityRatio(
-                    imgData.previewUrl || imgData.dataUrl,
-                    imgData.type,
-                    quality,
-                    imgData.currentBytes || imgData.originalBytes,
-                    imgData,
-                    false
-                );
-                processedUrl = processed.url;
-                processedFormat = processed.format || 'JPEG';
-            }
+            const processedImage = await processQualityRatio(
+                imgData.previewUrl || imgData.dataUrl,
+                imgData.type,
+                quality,
+                imgData.currentBytes || imgData.originalBytes,
+                imgData,
+                false
+            );
 
             const usedPageSize = (imgData.pageSizeOverride && imgData.pageSizeOverride !== 'global') ? imgData.pageSizeOverride : STATE.settings.pageSize;
             const usedMargin = (imgData.marginOverride && imgData.marginOverride !== 'global') ? imgData.marginOverride : STATE.settings.margin;
@@ -2529,16 +2525,17 @@ async function compilePDFDocument(progressCallback, cancellationToken = null, fo
 
             const itemDoc = new jsPDF(docConfig);
 
-            let itemImageSource = processedUrl;
-            if (processed && processed.getUint8Array) {
-                itemImageSource = await processed.getUint8Array();
-            } else if (processed && processed.blob) {
-                itemImageSource = new Uint8Array(await processed.blob.arrayBuffer());
+            let itemImageSource = processedImage.url;
+            if (processedImage.getUint8Array) {
+                const arr = await processedImage.getUint8Array();
+                if (arr) itemImageSource = arr;
+            } else if (processedImage.blob) {
+                itemImageSource = new Uint8Array(await processedImage.blob.arrayBuffer());
             }
 
             itemDoc.addImage(
                 itemImageSource,
-                processedFormat,
+                processedImage.format,
                 pageConfig.imgX,
                 pageConfig.imgY,
                 pageConfig.imgW,
@@ -2690,7 +2687,21 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
         return {
             url: sourceData,
             format,
-            byteSize
+            byteSize,
+            getUint8Array: async () => {
+                if (fileObj && fileObj.file && (!fileObj.isEdited)) {
+                    try {
+                        return new Uint8Array(await fileObj.file.arrayBuffer());
+                    } catch (_) { }
+                }
+                if (typeof sourceData === 'string' && sourceData.startsWith('blob:')) {
+                    try {
+                        const res = await fetch(sourceData);
+                        return new Uint8Array(await res.arrayBuffer());
+                    } catch (_) { }
+                }
+                return null;
+            }
         };
     }
 
@@ -3977,31 +3988,14 @@ async function downloadSinglePDF(index) {
 
     try {
         const quality = fileObj.quality || 100;
-        let processedUrl = fileObj.previewUrl || fileObj.dataUrl;
-        let processedFormat = (fileObj.type && fileObj.type.includes('png')) ? 'PNG' : 'JPEG';
-
-        let processedResult = null;
-        if (quality !== 100) {
-            const qualityCache = qualityRatioCache.get(fileObj.previewUrl || fileObj.dataUrl);
-            const cacheKey = `${quality}|${fileObj.type}`;
-
-            if (qualityCache && qualityCache.has(cacheKey)) {
-                processedResult = await qualityCache.get(cacheKey);
-                processedUrl = processedResult.url;
-                processedFormat = processedResult.format || 'JPEG';
-            } else {
-                processedResult = await processQualityRatio(
-                    fileObj.previewUrl || fileObj.dataUrl,
-                    fileObj.type,
-                    quality,
-                    fileObj.currentBytes || fileObj.originalBytes,
-                    fileObj,
-                    false
-                );
-                processedUrl = processedResult.url;
-                processedFormat = processedResult.format || 'JPEG';
-            }
-        }
+        const processedResult = await processQualityRatio(
+            fileObj.previewUrl || fileObj.dataUrl,
+            fileObj.type,
+            quality,
+            fileObj.currentBytes || fileObj.originalBytes,
+            fileObj,
+            false
+        );
 
         const usedPageSize = (fileObj.pageSizeOverride && fileObj.pageSizeOverride !== 'global') ? fileObj.pageSizeOverride : STATE.settings.pageSize;
         const usedMargin = (fileObj.marginOverride && fileObj.marginOverride !== 'global') ? fileObj.marginOverride : STATE.settings.margin;
@@ -4021,16 +4015,17 @@ async function downloadSinglePDF(index) {
             format: [pageConfig.pageW, pageConfig.pageH]
         });
 
-        let singleImageSource = processedUrl;
-        if (processedResult && processedResult.getUint8Array) {
-            singleImageSource = await processedResult.getUint8Array();
-        } else if (processedResult && processedResult.blob) {
+        let singleImageSource = processedResult.url;
+        if (processedResult.getUint8Array) {
+            const arr = await processedResult.getUint8Array();
+            if (arr) singleImageSource = arr;
+        } else if (processedResult.blob) {
             singleImageSource = new Uint8Array(await processedResult.blob.arrayBuffer());
         }
 
         doc.addImage(
             singleImageSource,
-            processedFormat,
+            processedResult.format || 'JPEG',
             pageConfig.imgX,
             pageConfig.imgY,
             pageConfig.imgW,
