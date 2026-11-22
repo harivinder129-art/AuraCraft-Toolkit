@@ -1362,11 +1362,8 @@ async function processFiles(files) {
     }
 
     DOM.btnConvert.disabled = true;
-    const btnTextEl = DOM.btnConvert.querySelector('.btn-text');
-    const btnLoadEl = DOM.btnConvert.querySelector('.btn-loading');
-    const spinnerEl = btnLoadEl ? btnLoadEl.querySelector('.spinner') : null;
-    const progressEl = document.getElementById('compilationProgress');
     const glowBgEl = document.getElementById('glowBg');
+    const stickySpinner = DOM.stickyProgressContainer ? DOM.stickyProgressContainer.querySelector('.spinner') : null;
 
     let hasHeicOrPdf = false;
     validFiles.forEach(file => {
@@ -1378,13 +1375,19 @@ async function processFiles(files) {
 
     // Disable continuous 60 FPS compositor triggers while decoding HEIC/PDF
     if (hasHeicOrPdf) {
-        if (btnTextEl) btnTextEl.style.display = 'none';
-        if (btnLoadEl) btnLoadEl.style.display = 'inline-flex';
-        if (spinnerEl) spinnerEl.style.display = 'none'; // Stop SVG keyframe rotation
         if (glowBgEl) glowBgEl.style.display = 'none';   // Disable blur(120px) background passes
         DOM.btnConvert.classList.remove('btn-glow-active'); // Stop pulse shadow calculations
-        if (progressEl) progressEl.textContent = 'Processing files...';
         await new Promise(r => setTimeout(r, 16));
+    }
+
+    // Link progress directly to sticky bottom bar without any spinner to eliminate CPU load
+    if (stickySpinner) stickySpinner.style.display = 'none';
+    if (DOM.stickyProgressContainer) DOM.stickyProgressContainer.style.display = 'inline-flex';
+    if (DOM.stickyStatusBadge) DOM.stickyStatusBadge.style.display = 'none';
+    if (DOM.stickyProgressText) {
+        DOM.stickyProgressText.textContent = validFiles.length > 1
+            ? `Processing 1 of ${validFiles.length}...`
+            : 'Processing file...';
     }
 
     async function runParallelPool(items, worker, concurrency) {
@@ -1395,8 +1398,8 @@ async function processFiles(files) {
         const workers = Array.from({ length: Math.min(concurrency, total) }, async () => {
             while (nextIndex < total) {
                 const index = nextIndex++;
-                if (progressEl && total > 1) {
-                    progressEl.textContent = `Processing image ${index + 1} of ${total}...`;
+                if (DOM.stickyProgressText && total > 1) {
+                    DOM.stickyProgressText.textContent = `Processing image ${index + 1} of ${total}...`;
                 }
                 try {
                     results[index] = await worker(items[index], index);
@@ -1405,8 +1408,8 @@ async function processFiles(files) {
                     results[index] = [];
                 }
                 completedCount++;
-                if (progressEl && total > 1) {
-                    progressEl.textContent = `Processed ${completedCount} of ${total}`;
+                if (DOM.stickyProgressText && total > 1) {
+                    DOM.stickyProgressText.textContent = `Processed ${completedCount} of ${total}`;
                 }
             }
         });
@@ -1447,12 +1450,12 @@ async function processFiles(files) {
         }
     } finally {
         DOM.fileInput.value = '';
-        if (spinnerEl) spinnerEl.style.display = '';
+        if (DOM.stickyProgressContainer) DOM.stickyProgressContainer.style.display = 'none';
+        if (DOM.stickyStatusBadge) DOM.stickyStatusBadge.style.display = 'inline-flex';
+        if (stickySpinner) stickySpinner.style.display = '';
         if (glowBgEl) glowBgEl.style.display = '';
-        DOM.btnConvert.classList.add('btn-glow-active');
-        if (btnTextEl && btnLoadEl) {
-            btnTextEl.style.display = 'inline-flex';
-            btnLoadEl.style.display = 'none';
+        if (STATE.files.length > 0) {
+            DOM.btnConvert.classList.add('btn-glow-active');
         }
     }
 }
@@ -1991,23 +1994,13 @@ function updateStickyProgress(show, text = '') {
     }
 
     if (DOM.btnConvert) {
-        const btnTextEl = DOM.btnConvert.querySelector('.btn-text');
-        const btnLoadEl = DOM.btnConvert.querySelector('.btn-loading');
-
         if (show) {
             DOM.btnConvert.disabled = true;
-            // Keep normal button text visible in Document Layout Preview (processing is shown in bottom sticky bar)
-            if (btnTextEl) btnTextEl.style.display = 'inline-flex';
-            if (btnLoadEl) btnLoadEl.style.display = 'none';
-
             // Kill heavy GPU compositor filters while compiling
             if (glowBgEl) glowBgEl.style.display = 'none';
             DOM.btnConvert.classList.remove('btn-glow-active');
         } else {
             DOM.btnConvert.disabled = STATE.files.length === 0;
-            if (btnTextEl) btnTextEl.style.display = 'inline-flex';
-            if (btnLoadEl) btnLoadEl.style.display = 'none';
-
             // Restore effects when idle
             if (glowBgEl) glowBgEl.style.display = '';
             if (STATE.files.length > 0) {
