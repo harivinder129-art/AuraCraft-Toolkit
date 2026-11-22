@@ -2902,8 +2902,9 @@ function getPageDimensionsAndImageBounds(imgW, imgH, pageSize, orientation, marg
     let pageH = 0;
 
     if (pageSize === 'original') {
-        pageW = imgW * 0.75;
-        pageH = imgH * 0.75;
+        const targetW = 595.28;
+        pageW = targetW;
+        pageH = targetW * (imgH / imgW);
 
         const margin = MARGIN_SIZES[marginType] || 0;
 
@@ -2918,13 +2919,15 @@ function getPageDimensionsAndImageBounds(imgW, imgH, pageSize, orientation, marg
             };
         } else {
             const drawW = pageW - (margin * 2);
-            const drawH = pageH - (margin * 2);
+            const drawH = drawW * (imgH / imgW);
+            const imgX = drawW > 0 ? margin : 0;
+            const imgY = drawW > 0 ? (pageH - drawH) / 2 : 0;
 
             return {
                 pageW: pageW,
                 pageH: pageH,
-                imgX: margin,
-                imgY: margin,
+                imgX: imgX,
+                imgY: imgY,
                 imgW: drawW > 0 ? drawW : pageW,
                 imgH: drawH > 0 ? drawH : pageH
             };
