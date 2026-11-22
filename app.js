@@ -1321,6 +1321,36 @@ async function processSingleImageFile(file) {
         } catch (_) { }
     }
 
+    const isJpeg = (resolvedType === 'image/jpeg' || resolvedType === 'image/jpg');
+    let exactPdfSize = approxBytes + 1500;
+    let cachedBitmap = null;
+
+    if (!isJpeg) {
+        try {
+            const tempFileObj = {
+                file: fileToProcess,
+                previewUrl: previewUrl,
+                originalPreviewUrl: previewUrl,
+                width: dims.width,
+                height: dims.height
+            };
+            const processed = await processQualityRatio(
+                previewUrl,
+                resolvedType,
+                100,
+                approxBytes,
+                tempFileObj,
+                true
+            );
+            if (processed && processed.byteSize) {
+                exactPdfSize = processed.byteSize + 1500;
+            }
+            if (tempFileObj._cachedBitmap) {
+                cachedBitmap = tempFileObj._cachedBitmap;
+            }
+        } catch (_) { }
+    }
+
     const fileRecord = {
         id: Date.now() + Math.random().toString(36).substr(2, 5),
         file: fileToProcess,
@@ -1337,10 +1367,13 @@ async function processSingleImageFile(file) {
         name: fileToProcess.name,
         originalBytes: approxBytes,
         currentBytes: approxBytes,
-        exactPdfSize: approxBytes + 1500,
+        exactPdfSize: exactPdfSize,
         sizeText: formatFileSize(approxBytes),
         type: resolvedType
     };
+    if (cachedBitmap) {
+        fileRecord._cachedBitmap = cachedBitmap;
+    }
     fileRecord.sizeFingerprint = getFileSizeFingerprint(fileRecord);
 
     return [fileRecord];
