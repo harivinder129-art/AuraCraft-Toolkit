@@ -351,7 +351,7 @@ function initEventListeners() {
     DOM.prevPreview.addEventListener('click', () => navigatePreview(-1));
     DOM.nextPreview.addEventListener('click', () => navigatePreview(1));
 
-    DOM.btnConvert.addEventListener('click', convertImagesToPDF);
+    if (DOM.btnConvert) DOM.btnConvert.addEventListener('click', convertImagesToPDF);
 
     // Bottom Sticky Action Bar Events
     if (DOM.btnStickyExportPdf) {
@@ -1361,7 +1361,7 @@ async function processFiles(files) {
         return;
     }
 
-    DOM.btnConvert.disabled = true;
+    if (DOM.btnConvert) DOM.btnConvert.disabled = true;
     const glowBgEl = document.getElementById('glowBg');
     const stickySpinner = DOM.stickyProgressContainer ? DOM.stickyProgressContainer.querySelector('.spinner') : null;
 
@@ -1376,7 +1376,7 @@ async function processFiles(files) {
     // Disable continuous 60 FPS compositor triggers while decoding HEIC/PDF
     if (hasHeicOrPdf) {
         if (glowBgEl) glowBgEl.style.display = 'none';   // Disable blur(120px) background passes
-        DOM.btnConvert.classList.remove('btn-glow-active'); // Stop pulse shadow calculations
+        if (DOM.btnConvert) DOM.btnConvert.classList.remove('btn-glow-active'); // Stop pulse shadow calculations
         await new Promise(r => setTimeout(r, 16));
     }
 
@@ -1454,7 +1454,7 @@ async function processFiles(files) {
         if (DOM.stickyStatusBadge) DOM.stickyStatusBadge.style.display = 'inline-flex';
         if (stickySpinner) stickySpinner.style.display = '';
         if (glowBgEl) glowBgEl.style.display = '';
-        if (STATE.files.length > 0) {
+        if (DOM.btnConvert && STATE.files.length > 0) {
             DOM.btnConvert.classList.add('btn-glow-active');
         }
     }
@@ -1576,7 +1576,7 @@ function updateUIState() {
 
     if (fileCount === 0) {
         DOM.imageListCard.style.display = 'none';
-        DOM.btnConvert.disabled = true;
+        if (DOM.btnConvert) DOM.btnConvert.disabled = true;
 
         if (DOM.btnStickyExportPdf) DOM.btnStickyExportPdf.disabled = true;
         if (DOM.btnStickySaveImages) DOM.btnStickySaveImages.disabled = true;
@@ -1595,7 +1595,7 @@ function updateUIState() {
         }
     } else {
         DOM.imageListCard.style.display = 'flex';
-        DOM.btnConvert.disabled = STATE.compiling;
+        if (DOM.btnConvert) DOM.btnConvert.disabled = STATE.compiling;
         DOM.previewPlaceholder.style.display = 'none';
 
         if (!STATE.compiling) {
