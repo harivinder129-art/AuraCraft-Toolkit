@@ -652,34 +652,34 @@ async function processPdfFile(file) {
                 viewport: viewport
             }).promise;
 
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.98);
+            const pageBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.98));
+            const pageBytes = pageBlob.size;
+            const pageName = `${file.name.replace(/\.[^/.]+$/, "")}-p${pageNum}.jpg`;
+            const pageFile = new File([pageBlob], pageName, { type: 'image/jpeg' });
+            const pageUrl = URL.createObjectURL(pageBlob);
 
             canvas.width = 0;
             canvas.height = 0;
             page.cleanup();
 
-            const base64Length = dataUrl.length;
-            const headerIndex = dataUrl.indexOf(',');
-            const dataLength = headerIndex !== -1 ? base64Length - headerIndex - 1 : base64Length;
-            const approxBytes = Math.round(dataLength * 0.75);
-
             const pageRecord = {
                 id: Date.now() + Math.random().toString(36).substr(2, 5),
-                file: file,
-                originalFile: file,
+                file: pageFile,
+                originalFile: pageFile,
                 isEdited: false,
-                dataUrl: dataUrl,
-                originalDataUrl: dataUrl,
-                previewUrl: dataUrl,
-                originalPreviewUrl: dataUrl,
+                dataUrl: pageUrl,
+                originalDataUrl: pageUrl,
+                previewUrl: pageUrl,
+                originalPreviewUrl: pageUrl,
+                thumbUrl: pageUrl,
                 quality: 100,
                 width: Math.round(viewport.width / scale),
                 height: Math.round(viewport.height / scale),
-                name: file.name,
-                originalBytes: approxBytes,
-                currentBytes: approxBytes,
-                exactPdfSize: approxBytes + 1500,
-                sizeText: formatFileSize(approxBytes),
+                name: pageName,
+                originalBytes: pageBytes,
+                currentBytes: pageBytes,
+                exactPdfSize: pageBytes + 1500,
+                sizeText: formatFileSize(pageBytes),
                 type: 'image/jpeg',
                 isPdfPage: true,
                 pdfPageNum: pageNum,
@@ -2431,7 +2431,8 @@ async function compilePDFDocument(progressCallback, cancellationToken = null, fo
             const docConfig = {
                 orientation: pageConfig.pageW > pageConfig.pageH ? 'l' : 'p',
                 unit: 'pt',
-                format: [pageConfig.pageW, pageConfig.pageH]
+                format: [pageConfig.pageW, pageConfig.pageH],
+                compress: true
             };
 
             if (STATE.settings.enablePassword && STATE.settings.pdfPassword) {
@@ -2509,7 +2510,8 @@ async function compilePDFDocument(progressCallback, cancellationToken = null, fo
             const docConfig = {
                 orientation: pageConfig.pageW > pageConfig.pageH ? 'l' : 'p',
                 unit: 'pt',
-                format: [pageConfig.pageW, pageConfig.pageH]
+                format: [pageConfig.pageW, pageConfig.pageH],
+                compress: true
             };
 
             if (STATE.settings.enablePassword && STATE.settings.pdfPassword) {
@@ -2673,8 +2675,9 @@ function scheduleSharedDomCanvasCleanup() {
 
 // Fast Hardware-Accelerated Quality Compressor (Exact Original Dimensions, Single-Pass)
 async function processQualityRatio(sourceData, mimeType, quality, knownByteSize = null, fileObj = null, onlyByteSize = false) {
-    if (quality === 100 || mimeType === 'image/svg+xml') {
-        const format = (mimeType && mimeType.includes('png')) ? 'PNG' : 'JPEG';
+    const isJpeg = (mimeType === 'image/jpeg' || mimeType === 'image/jpg');
+
+    if (quality === 100 && isJpeg) {
         let byteSize = knownByteSize;
         if (byteSize === null && typeof sourceData === 'string') {
             const headerIndex = sourceData.indexOf(',');
@@ -2683,8 +2686,8 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
         }
         return {
             url: sourceData,
-            format,
-            byteSize,
+            format: 'JPEG',
+            byteSize: byteSize || (fileObj ? fileObj.currentBytes || fileObj.originalBytes : null),
             getUint8Array: async () => {
                 const isUnedited = (!fileObj) || (
                     (!fileObj.isEdited) &&
@@ -3116,7 +3119,8 @@ function recalculateEstimatedPDFSize(targetIndex = null) {
         }
 
         const quality = fileObj.quality || 100;
-        if (quality === 100 || fileObj.type === 'image/svg+xml') {
+        const isJpeg = (fileObj.type === 'image/jpeg' || fileObj.type === 'image/jpg');
+        if (quality === 100 && isJpeg) {
             const bytes = fileObj.currentBytes || fileObj.originalBytes || 0;
             fileObj.exactPdfSize = bytes + 1500;
             fileObj.sizeFingerprint = fingerprint;
@@ -4030,7 +4034,8 @@ async function downloadSinglePDF(index) {
         const doc = new jsPDF({
             orientation: pageConfig.pageW > pageConfig.pageH ? 'l' : 'p',
             unit: 'pt',
-            format: [pageConfig.pageW, pageConfig.pageH]
+            format: [pageConfig.pageW, pageConfig.pageH],
+            compress: true
         });
 
         let singleImageSource = processedResult.url;
