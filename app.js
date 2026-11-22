@@ -1979,7 +1979,6 @@ function closeAllStickyDropdowns() {
 
 function updateStickyProgress(show, text = '') {
     const glowBgEl = document.getElementById('glowBg');
-    const spinnerEl = DOM.btnConvert ? DOM.btnConvert.querySelector('.spinner') : null;
 
     if (DOM.stickyProgressContainer) {
         DOM.stickyProgressContainer.style.display = show ? 'inline-flex' : 'none';
@@ -1994,13 +1993,12 @@ function updateStickyProgress(show, text = '') {
     if (DOM.btnConvert) {
         const btnTextEl = DOM.btnConvert.querySelector('.btn-text');
         const btnLoadEl = DOM.btnConvert.querySelector('.btn-loading');
-        const progressEl = document.getElementById('compilationProgress');
 
         if (show) {
             DOM.btnConvert.disabled = true;
-            if (btnTextEl) btnTextEl.style.display = 'none';
-            if (btnLoadEl) btnLoadEl.style.display = 'inline-flex';
-            if (progressEl) progressEl.textContent = text;
+            // Keep normal button text visible in Document Layout Preview (processing is shown in bottom sticky bar)
+            if (btnTextEl) btnTextEl.style.display = 'inline-flex';
+            if (btnLoadEl) btnLoadEl.style.display = 'none';
 
             // Kill heavy GPU compositor filters while compiling
             if (glowBgEl) glowBgEl.style.display = 'none';
@@ -2012,7 +2010,9 @@ function updateStickyProgress(show, text = '') {
 
             // Restore effects when idle
             if (glowBgEl) glowBgEl.style.display = '';
-            DOM.btnConvert.classList.add('btn-glow-active');
+            if (STATE.files.length > 0) {
+                DOM.btnConvert.classList.add('btn-glow-active');
+            }
         }
     }
 }
