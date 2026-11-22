@@ -666,6 +666,8 @@ async function processPdfFile(file) {
             const pageRecord = {
                 id: Date.now() + Math.random().toString(36).substr(2, 5),
                 file: file,
+                originalFile: file,
+                isEdited: false,
                 dataUrl: dataUrl,
                 originalDataUrl: dataUrl,
                 previewUrl: dataUrl,
@@ -1322,6 +1324,8 @@ async function processSingleImageFile(file) {
     const fileRecord = {
         id: Date.now() + Math.random().toString(36).substr(2, 5),
         file: fileToProcess,
+        originalFile: fileToProcess,
+        isEdited: false,
         dataUrl: previewUrl,
         originalDataUrl: previewUrl,
         previewUrl: previewUrl,
@@ -2682,12 +2686,23 @@ async function processQualityRatio(sourceData, mimeType, quality, knownByteSize 
             format,
             byteSize,
             getUint8Array: async () => {
-                if (fileObj && fileObj.file && (!fileObj.isEdited)) {
+                const isUnedited = (!fileObj) || (
+                    (!fileObj.isEdited) &&
+                    (!fileObj.editCount || fileObj.editCount === 0) &&
+                    (!fileObj.rotation || fileObj.rotation === 0) &&
+                    (fileObj.previewUrl === fileObj.originalPreviewUrl)
+                );
+                if (isUnedited && fileObj && fileObj.file) {
                     try {
                         return new Uint8Array(await fileObj.file.arrayBuffer());
                     } catch (_) { }
                 }
-                if (typeof sourceData === 'string' && sourceData.startsWith('blob:')) {
+                if (fileObj && fileObj.isEdited && fileObj.file) {
+                    try {
+                        return new Uint8Array(await fileObj.file.arrayBuffer());
+                    } catch (_) { }
+                }
+                if (typeof sourceData === 'string' && (sourceData.startsWith('blob:') || sourceData.startsWith('data:'))) {
                     try {
                         const res = await fetch(sourceData);
                         return new Uint8Array(await res.arrayBuffer());
@@ -3908,6 +3923,8 @@ async function applyImageEdits() {
         }
 
         // 3. Assign new edited blob and URLs
+        fileObj.isEdited = true;
+        fileObj.file = new File([outputBlob], fileObj.name, { type: outputType });
         fileObj.dataUrl = croppedDataUrl;
         fileObj.previewUrl = URL.createObjectURL(outputBlob);
         fileObj.thumbUrl = await createMicroThumbnail(outputBlob) || fileObj.previewUrl;
@@ -3948,6 +3965,11 @@ function resetEdits(index) {
             URL.revokeObjectURL(fileObj.thumbUrl);
         }
 
+        fileObj.isEdited = false;
+        fileObj.editCount = 0;
+        if (fileObj.originalFile) {
+            fileObj.file = fileObj.originalFile;
+        }
         fileObj.dataUrl = fileObj.originalDataUrl;
         fileObj.previewUrl = fileObj.originalPreviewUrl || fileObj.originalDataUrl;
         fileObj.thumbUrl = fileObj.file ? (await createMicroThumbnail(fileObj.file) || fileObj.previewUrl) : fileObj.previewUrl;
