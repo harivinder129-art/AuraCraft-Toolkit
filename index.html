@@ -182,24 +182,10 @@
     <div class="bottom-sticky-bar" id="bottomStickyBar">
         <!-- PDF Settings Deck (Docked just above sticky bar) -->
         <div class="glass-card settings-card collapsed">
-            <div class="card-header border-bottom collapsible-trigger" id="settingsHeader"
-                style="cursor: pointer; user-select: none;">
-                <div class="header-title-group">
-                    <i data-lucide="sliders" class="title-icon"></i>
-                    <h2>Advanced Settings</h2>
-                </div>
-                <i data-lucide="chevron-up" class="toggle-chevron" id="settingsChevron"
-                    style="transition: transform var(--transition-normal); width: 18px; height: 18px; color: var(--text-secondary);"></i>
-            </div>
-
             <div class="settings-form">
                 <!-- Page Size Selector -->
                 <div class="setting-group">
-                    <label for="pageSize" class="setting-label">
-                        <span>Page Size</span>
-                        <span class="label-info" title="Choose original dimensions or paper standard"><i
-                                data-lucide="help-circle"></i></span>
-                    </label>
+                    <label for="pageSize" class="setting-label">Page Size</label>
                     <div class="select-wrapper">
                         <select id="pageSize" class="custom-select">
                             <option value="original" selected>Original Size (Exact Dimensions)</option>
@@ -229,77 +215,54 @@
 
                 <!-- Margins Selector -->
                 <div class="setting-group">
-                    <label class="setting-label">Page Margins</label>
+                    <label class="setting-label">Margins</label>
                     <div class="tab-selector margin-selector">
-                        <button type="button" class="tab-btn active" data-value="none">
-                            None
-                        </button>
-                        <button type="button" class="tab-btn" data-value="thin">
-                            Thin (0.5 in)
-                        </button>
-                        <button type="button" class="tab-btn" data-value="normal">
-                            Normal (1.0 in)
-                        </button>
+                        <button type="button" class="tab-btn active" data-value="none">None</button>
+                        <button type="button" class="tab-btn" data-value="thin">Thin (0.5")</button>
+                        <button type="button" class="tab-btn" data-value="normal">Normal (1")</button>
                     </div>
                 </div>
 
                 <!-- Image Fitting Options (Only used when standard sizes are chosen) -->
                 <div class="setting-group" id="imageFittingGroup" style="display: none;">
-                    <label for="imageFitting" class="setting-label">Image Placement</label>
+                    <label for="imageFitting" class="setting-label">Placement</label>
                     <div class="select-wrapper">
                         <select id="imageFitting" class="custom-select">
-                            <option value="fit" selected>Fit Within Margins (Keep Proportion)</option>
+                            <option value="fit" selected>Fit Within Margins (Proportional)</option>
                             <option value="fill">Fill Entire Page (Crop if Needed)</option>
-                            <option value="stretch">Stretch to Fill (No Crop, Ignores Ratio)</option>
+                            <option value="stretch">Stretch to Fill (No Crop)</option>
                         </select>
                     </div>
                 </div>
 
                 <!-- Document Watermark -->
-                <div class="setting-group border-top">
-                    <label class="setting-label">
-                        <i data-lucide="type" class="title-icon"></i>
-                        Document Watermark
-                    </label>
+                <div class="setting-group">
+                    <label for="watermarkText" class="setting-label">Watermark</label>
                     <input type="text" id="watermarkText" class="custom-input" placeholder="e.g. CONFIDENTIAL">
-                    <p class="sub-text">Text will be stamped diagonally across every page.</p>
                 </div>
 
                 <!-- Security / Encryption -->
-                <div class="setting-group border-top">
-                    <div class="setting-label-between" style="cursor: pointer;" id="togglePasswordBtn">
-                        <label class="setting-label" style="cursor: pointer;">
-                            <i data-lucide="lock" class="title-icon"></i>
-                            Password Protection
-                        </label>
+                <div class="setting-group setting-group-col">
+                    <div class="setting-row-line" style="cursor: pointer;" id="togglePasswordBtn">
+                        <label class="setting-label" style="cursor: pointer;">Password</label>
                         <input type="checkbox" id="enablePassword" class="custom-checkbox"
-                            style="width: 17px; height: 17px; cursor: pointer;">
+                            style="width: 16px; height: 16px; cursor: pointer;">
                     </div>
-                    <div id="passwordInputContainer" style="display: none; margin-top: 0.5rem;">
+                    <div id="passwordInputContainer" style="display: none;">
                         <input type="password" id="pdfPassword" class="custom-input"
                             placeholder="Enter PDF password...">
-                        <p class="sub-text">PDF will be encrypted. Password is required to open.</p>
                     </div>
                 </div>
             </div>
         </div>
 
         <div class="sticky-bar-container">
-            <!-- Left Side: Selection status & Progress -->
-            <div class="sticky-status-info">
-                <div class="sticky-file-badge" id="stickyStatusBadge">
-                    <i data-lucide="layers" class="sticky-icon-sm"></i>
-                    <span id="stickyFileCount">0 items</span>
-                </div>
-                <div class="sticky-progress-container" id="stickyProgressContainer" style="display: none;">
-                    <svg class="spinner" viewBox="0 0 50 50">
-                        <circle class="path" cx="25" cy="25" r="20" fill="none" stroke-width="5"></circle>
-                    </svg>
-                    <span id="stickyProgressText">Processing...</span>
-                </div>
+            <!-- Live Progress -->
+            <div class="sticky-progress-container" id="stickyProgressContainer" style="display: none;">
+                <span id="stickyProgressText">Processing...</span>
             </div>
 
-            <!-- Right Side: Action Trigger Groups -->
+            <!-- Action Trigger Groups -->
             <div class="sticky-actions-group">
                 <!-- 1st: Export PDF Group (Separate PDFs / Single PDF) -->
                 <div class="sticky-dropdown-wrapper" id="stickyPdfDropdown">
@@ -376,6 +339,15 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- 3rd: Advanced Settings icon-only trigger -->
+                <button type="button" class="btn btn-ghost sticky-action-btn sticky-settings-trigger"
+                    id="settingsHeader" title="Advanced Settings"
+                    aria-expanded="false">
+                    <i data-lucide="sliders" style="width: 18px; height: 18px;"></i>
+                    <i data-lucide="chevron-up" class="toggle-chevron" id="settingsChevron"
+                        style="width: 13px; height: 13px;"></i>
+                </button>
             </div>
         </div>
     </div>

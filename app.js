@@ -67,8 +67,8 @@ const DOM = {
 
     // Bottom Sticky Action Bar Elements
     bottomStickyBar: document.getElementById('bottomStickyBar'),
-    stickyFileCount: document.getElementById('stickyFileCount'),
-    stickyStatusBadge: document.getElementById('stickyStatusBadge'),
+    stickyBarContainer: document.querySelector('.sticky-bar-container'),
+    stickyActionsGroup: document.querySelector('.sticky-actions-group'),
     stickyProgressContainer: document.getElementById('stickyProgressContainer'),
     stickyProgressText: document.getElementById('stickyProgressText'),
     stickyPdfDropdown: document.getElementById('stickyPdfDropdown'),
@@ -211,11 +211,13 @@ function initEventListeners() {
                 closeAllStickyDropdowns();
             }
             DOM.settingsCard.classList.toggle('collapsed');
+            DOM.settingsHeader.classList.toggle('active', !DOM.settingsCard.classList.contains('collapsed'));
         });
 
         document.addEventListener('click', (e) => {
-            if (!DOM.settingsCard.classList.contains('collapsed') && !DOM.settingsCard.contains(e.target)) {
+            if (!DOM.settingsCard.classList.contains('collapsed') && !DOM.settingsCard.contains(e.target) && e.target !== DOM.settingsHeader && !DOM.settingsHeader.contains(e.target)) {
                 DOM.settingsCard.classList.add('collapsed');
+                DOM.settingsHeader.classList.remove('active');
             }
         });
     }
@@ -1429,7 +1431,6 @@ async function processFiles(files) {
 
     if (DOM.btnConvert) DOM.btnConvert.disabled = true;
     const glowBgEl = document.getElementById('glowBg');
-    const stickySpinner = DOM.stickyProgressContainer ? DOM.stickyProgressContainer.querySelector('.spinner') : null;
 
     let hasHeicOrPdf = false;
     validFiles.forEach(file => {
@@ -1446,15 +1447,10 @@ async function processFiles(files) {
         await new Promise(r => setTimeout(r, 16));
     }
 
-    // Link progress directly to sticky bottom bar without any spinner to eliminate CPU load
-    if (stickySpinner) stickySpinner.style.display = 'none';
-    if (DOM.stickyProgressContainer) DOM.stickyProgressContainer.style.display = 'inline-flex';
-    if (DOM.stickyStatusBadge) DOM.stickyStatusBadge.style.display = 'none';
-    if (DOM.stickyProgressText) {
-        DOM.stickyProgressText.textContent = validFiles.length > 1
-            ? `Processing 1 of ${validFiles.length}...`
-            : 'Processing file...';
-    }
+    // Show full-bar processing in sticky bar across the entire div
+    updateStickyProgress(true, validFiles.length > 1
+        ? `Processing 1 of ${validFiles.length}...`
+        : 'Processing file...');
 
     async function runParallelPool(items, worker, concurrency) {
         const results = new Array(items.length);
@@ -1516,9 +1512,7 @@ async function processFiles(files) {
         }
     } finally {
         DOM.fileInput.value = '';
-        if (DOM.stickyProgressContainer) DOM.stickyProgressContainer.style.display = 'none';
-        if (DOM.stickyStatusBadge) DOM.stickyStatusBadge.style.display = 'inline-flex';
-        if (stickySpinner) stickySpinner.style.display = '';
+        updateStickyProgress(false);
         if (glowBgEl) glowBgEl.style.display = '';
         if (DOM.btnConvert && STATE.files.length > 0) {
             DOM.btnConvert.classList.add('btn-glow-active');
@@ -1656,7 +1650,6 @@ function updateUIState() {
 
         if (DOM.btnStickyExportPdf) DOM.btnStickyExportPdf.disabled = true;
         if (DOM.btnStickySaveImages) DOM.btnStickySaveImages.disabled = true;
-        if (DOM.stickyFileCount) DOM.stickyFileCount.textContent = '0 items';
         if (DOM.bottomStickyBar) DOM.bottomStickyBar.classList.add('is-empty');
         closeAllStickyDropdowns();
 
@@ -1678,7 +1671,6 @@ function updateUIState() {
             if (DOM.btnStickyExportPdf) DOM.btnStickyExportPdf.disabled = false;
             if (DOM.btnStickySaveImages) DOM.btnStickySaveImages.disabled = false;
         }
-        if (DOM.stickyFileCount) DOM.stickyFileCount.textContent = `${fileCount} item${fileCount > 1 ? 's' : ''}`;
         if (DOM.bottomStickyBar) DOM.bottomStickyBar.classList.remove('is-empty');
 
         if (STATE.activePageIdx >= fileCount) {
@@ -2043,6 +2035,7 @@ function toggleStickyDropdown(dropdownEl) {
     closeAllStickyDropdowns();
     if (!wasOpen) {
         if (DOM.settingsCard) DOM.settingsCard.classList.add('collapsed');
+        if (DOM.settingsHeader) DOM.settingsHeader.classList.remove('active');
         dropdownEl.classList.add('is-open');
         const trigger = dropdownEl.querySelector('.sticky-action-btn');
         if (trigger) trigger.setAttribute('aria-expanded', 'true');
@@ -2060,14 +2053,19 @@ function closeAllStickyDropdowns() {
 function updateStickyProgress(show, text = '') {
     const glowBgEl = document.getElementById('glowBg');
 
+    const barContainer = DOM.stickyBarContainer || document.querySelector('.sticky-bar-container');
+    if (barContainer) {
+        const isCurrently = barContainer.classList.contains('is-processing');
+        if (isCurrently !== !!show) {
+            barContainer.classList.toggle('is-processing', !!show);
+        }
+    }
+
     if (DOM.stickyProgressContainer) {
         DOM.stickyProgressContainer.style.display = show ? 'inline-flex' : 'none';
     }
-    if (DOM.stickyProgressText && text) {
+    if (DOM.stickyProgressText && text && DOM.stickyProgressText.textContent !== text) {
         DOM.stickyProgressText.textContent = text;
-    }
-    if (DOM.stickyStatusBadge) {
-        DOM.stickyStatusBadge.style.display = show ? 'none' : 'inline-flex';
     }
 
     if (DOM.btnConvert) {
