@@ -685,15 +685,20 @@ body {
     gap: 0.75rem;
 }
 
-/* Individual Image item cards */
+/* Individual Image item cards - Universal 3-column grid with balanced action buttons */
 .image-item-node {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    padding: 0.75rem;
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr) 28px;
+    align-items: start;
+    width: 100%;
+    min-width: 0;
+    min-height: auto;
+    padding: 0.7rem 0.75rem 0.95rem 0.75rem;
+    gap: 0.55rem;
     background-color: var(--input-bg);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
+    overflow: visible;
     transition: border-color var(--transition-normal), transform var(--transition-normal);
 }
 
@@ -703,8 +708,10 @@ body {
 }
 
 .node-thumbnail {
-    width: 58px;
-    height: 58px;
+    grid-column: 1;
+    grid-row: 1;
+    width: 48px;
+    height: 48px;
     border-radius: var(--radius-sm);
     object-fit: cover;
     background-color: rgba(0, 0, 0, 0.2);
@@ -712,18 +719,22 @@ body {
 }
 
 .node-details {
-    flex: 1;
+    grid-column: 2;
+    grid-row: 1;
     min-width: 0;
+    width: 100%;
+    overflow: visible;
 }
 
 .node-details h4 {
-    font-size: 0.88rem;
+    font-size: 0.82rem;
     font-weight: 600;
     color: var(--text-primary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     margin-bottom: 0.15rem;
+    padding-right: 0.25rem;
 }
 
 .node-order {
@@ -743,32 +754,77 @@ body {
 .node-meta {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
+    gap: 0.35rem;
     flex-wrap: nowrap;
     white-space: nowrap;
+    line-height: 1.35;
+    overflow: hidden;
 }
 
 .meta-text {
-    font-size: 0.75rem;
+    font-size: 0.65rem;
     color: var(--text-muted);
 }
 
 .meta-divider {
-    width: 3px;
-    height: 3px;
-    border-radius: var(--radius-full);
-    background-color: var(--text-muted);
-    opacity: 0.5;
+    display: none;
 }
 
-.badge-dim {
-    background-color: rgba(139, 92, 246, 0.08);
-    border: 1px solid rgba(139, 92, 246, 0.15);
-    color: var(--accent-solid);
-    padding: 0.1rem 0.4rem;
-    border-radius: 4px;
-    font-size: 0.7rem;
-    font-weight: 600;
+.badge-dim,
+.badge {
+    font-size: 0.62rem;
+    padding: 0.08rem 0.25rem;
+    max-width: 100%;
+}
+
+.individual-pdf-size-badge {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.inline-quality-control {
+    max-width: none !important;
+    width: 100%;
+    margin-bottom: 6px !important;
+}
+
+.node-details > div:last-child {
+    display: flex !important;
+    flex-wrap: wrap;
+    align-items: center;
+    width: 100%;
+    gap: 0.35rem;
+    margin-bottom: 0.15rem;
+}
+
+.node-details > div:last-child .btn-crop-node {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+    min-height: 28px;
+    height: 28px;
+    padding: 0.2rem 0.25rem !important;
+    font-size: 0.64rem !important;
+    gap: 0.25rem;
+    white-space: nowrap;
+    line-height: 1.15;
+    overflow: hidden;
+    text-overflow: clip;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.node-details > div:last-child .btn-crop-node i {
+    width: 11px !important;
+    height: 11px !important;
+    flex-shrink: 0;
+}
+
+.node-details > div:last-child .btn-crop-node:nth-child(4) {
+    flex: 0 0 auto;
+    width: 100%;
 }
 
 .light-theme .badge-dim {
@@ -793,18 +849,23 @@ body {
 }
 
 .node-controls {
+    grid-column: 3;
+    grid-row: 1;
     display: flex;
     flex-direction: column;
-    align-items: center;
     justify-content: flex-start;
-    gap: 0.35rem;
+    align-items: center;
+    width: 28px;
+    border-top: 0;
+    padding-top: 0;
+    gap: 0.25rem;
     flex-shrink: 0;
 }
 
 /* Icon button circles */
 .btn-circle {
-    width: 28px;
-    height: 28px;
+    width: 26px;
+    height: 26px;
     border-radius: var(--radius-full);
     background: transparent;
     border: 1px solid var(--border-color);
@@ -814,6 +875,11 @@ body {
     align-items: center;
     justify-content: center;
     transition: background-color var(--transition-fast), border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.btn-circle i {
+    width: 12px;
+    height: 12px;
 }
 
 .btn-circle:hover:not(:disabled) {
@@ -2064,7 +2130,7 @@ body {
     -webkit-tap-highlight-color: transparent;
 }
 
-@media (max-width: 640px) {
+@media (max-width: 1000px) {
     :root {
         --radius-lg: 16px;
         --radius-md: 12px;
@@ -2121,77 +2187,6 @@ body {
         max-height: min(68vh, 620px);
         overflow-y: auto;
         padding-right: 0;
-    }
-
-    .image-item-node {
-        padding: 0.6rem;
-        gap: 0.65rem;
-        align-items: flex-start;
-        overflow: visible;
-        min-height: 118px;
-    }
-
-    .node-thumbnail {
-        width: 50px;
-        height: 50px;
-        flex-shrink: 0;
-    }
-
-    .node-details {
-        width: 100%;
-        overflow: visible;
-    }
-
-    .node-details h4 {
-        font-size: 0.82rem;
-        padding-right: 0.25rem;
-    }
-
-    .node-meta {
-        gap: 0.35rem;
-        line-height: 1.35;
-    }
-
-    .meta-divider {
-        display: none;
-    }
-
-    .badge-dim,
-    .badge {
-        font-size: 0.65rem;
-        padding: 0.1rem 0.3rem;
-        max-width: 100%;
-    }
-
-    .inline-quality-control {
-        max-width: none !important;
-        width: 100%;
-    }
-
-    .node-details>div:last-child {
-        flex-wrap: wrap;
-        width: 100%;
-    }
-
-    .btn-crop-node {
-        padding: 0.2rem 0.4rem !important;
-        font-size: 0.68rem !important;
-        white-space: nowrap;
-    }
-
-    .node-controls {
-        flex-shrink: 0;
-        gap: 0.25rem;
-    }
-
-    .node-controls .btn-circle {
-        width: 24px;
-        height: 24px;
-    }
-
-    .node-controls .btn-circle i {
-        width: 12px;
-        height: 12px;
     }
 
     /* Settings adaptations */
@@ -2339,7 +2334,7 @@ body {
 }
 
 /* Mobile editor dock: compact app-like editing experience */
-@media (max-width: 640px) {
+@media (max-width: 1000px) {
     .crop-modal-overlay {
         padding: 0;
         align-items: stretch;
@@ -2665,7 +2660,7 @@ body {
     }
 }
 
-@media (max-width: 640px) {
+@media (max-width: 1000px) {
     .app-header {
         position: sticky;
     }
@@ -2797,159 +2792,6 @@ body {
         flex-shrink: 0;
         padding: 0.35rem 0.45rem;
         font-size: 0.72rem;
-    }
-
-    .image-item-node {
-        display: grid;
-        grid-template-columns: 48px minmax(0, 1fr) 34px;
-        align-items: start;
-        width: 100%;
-        min-width: 0;
-        min-height: 118px;
-        padding: 0.65rem;
-        gap: 0.55rem;
-    }
-
-    .node-thumbnail {
-        grid-column: 1;
-        grid-row: 1;
-        width: 48px;
-        height: 48px;
-    }
-
-    .node-details {
-        grid-column: 2;
-        grid-row: 1;
-        min-width: 0;
-        overflow: visible;
-    }
-
-    .node-order {
-        display: inline-grid;
-        place-items: center;
-        width: 20px;
-        height: 20px;
-        margin-right: 0.35rem;
-        border-radius: var(--radius-full);
-        background: var(--accent-gradient);
-        color: #fff;
-        font-size: 0.68rem;
-        font-weight: 800;
-        vertical-align: middle;
-    }
-
-    .node-meta {
-        align-items: center;
-        flex-wrap: nowrap;
-        white-space: nowrap;
-        overflow: hidden;
-    }
-
-    .individual-pdf-size-badge {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .node-meta .badge-dim,
-    .node-meta .meta-text,
-    .node-meta .badge,
-    .node-meta .individual-pdf-size-badge {
-        font-size: 0.58rem !important;
-        line-height: 1;
-        padding: 0.08rem 0.2rem !important;
-        flex-shrink: 0;
-    }
-
-    .node-meta .meta-divider {
-        flex-shrink: 0;
-    }
-
-    .node-details>div:last-child {
-        display: flex !important;
-        flex-wrap: wrap;
-        align-items: center;
-        width: 100%;
-        gap: 0.35rem;
-    }
-
-    .node-details>div:last-child .btn-crop-node {
-        flex: 1 1 0;
-        width: auto;
-        min-width: 0;
-        min-height: 28px;
-        height: 28px;
-        padding: 0.2rem 0.25rem !important;
-        font-size: 0.62rem !important;
-        gap: 0.2rem;
-        white-space: nowrap;
-        line-height: 1.15;
-        overflow: hidden;
-        text-overflow: clip;
-    }
-
-    .node-details>div:last-child .btn-crop-node i {
-        width: 10px !important;
-        height: 10px !important;
-        flex-shrink: 0;
-    }
-
-    .node-details>div:last-child .btn-crop-node:nth-child(4) {
-        flex: 0 0 auto;
-        width: 100%;
-    }
-
-    .node-controls {
-        grid-column: 3;
-        grid-row: 1;
-        flex-direction: column;
-        justify-content: flex-start;
-        align-items: center;
-        width: 34px;
-        border-top: 0;
-        padding-top: 0;
-    }
-
-    .node-controls .btn-circle {
-        width: 34px;
-        height: 34px;
-    }
-
-    .node-controls .btn-circle {
-        width: 30px;
-        height: 30px;
-    }
-
-    .image-item-node {
-        grid-template-columns: 48px minmax(0, 1fr) 34px;
-    }
-
-    .node-thumbnail {
-        grid-column: 1;
-        grid-row: 1;
-    }
-
-    .node-details {
-        grid-column: 2;
-        grid-row: 1;
-    }
-
-    .node-controls {
-        grid-column: 3;
-        grid-row: 1;
-        flex-direction: column;
-        justify-content: flex-start;
-        align-items: center;
-        width: 34px;
-        border-top: 0;
-        padding-top: 0;
-        gap: 0.35rem;
-    }
-
-    .node-controls .btn-circle {
-        width: 32px;
-        height: 32px;
-        flex-shrink: 0;
     }
 
     .upload-card {
@@ -3394,7 +3236,7 @@ body {
 }
 
 /* Final mobile editor frame override: always use the complete physical viewport */
-@media (max-width: 640px) {
+@media (max-width: 1000px) {
     #editModal.crop-modal-overlay {
         position: fixed !important;
         inset: 0 !important;
@@ -3722,7 +3564,7 @@ body {
 }
 
 /* Mobile responsive layout */
-@media (max-width: 640px) {
+@media (max-width: 1000px) {
     .app-footer {
         padding-bottom: 5.5rem !important;
     }
