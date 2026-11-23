@@ -549,8 +549,8 @@ body {
     box-shadow: 0 3px 12px var(--accent-glow);
 }
 
-/* Mobile & Tablet Toggle Adaptations (<= 900px) */
-@media (max-width: 900px) {
+/* Mobile Toggle Adaptations (<= 640px) */
+@media (max-width: 640px) {
     .mobile-segmented-wrapper {
         display: flex !important;
     }
@@ -2080,7 +2080,7 @@ body {
     -webkit-tap-highlight-color: transparent;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 640px) {
     :root {
         --radius-lg: 16px;
         --radius-md: 12px;
@@ -2355,7 +2355,7 @@ body {
 }
 
 /* Mobile editor dock: compact app-like editing experience */
-@media (max-width: 768px) {
+@media (max-width: 640px) {
     .crop-modal-overlay {
         padding: 0;
         align-items: stretch;
@@ -2681,7 +2681,7 @@ body {
     }
 }
 
-@media (max-width: 660px) {
+@media (max-width: 640px) {
     .app-header {
         position: sticky;
     }
@@ -3410,7 +3410,7 @@ body {
 }
 
 /* Final mobile editor frame override: always use the complete physical viewport */
-@media (max-width: 768px) {
+@media (max-width: 640px) {
     #editModal.crop-modal-overlay {
         position: fixed !important;
         inset: 0 !important;
