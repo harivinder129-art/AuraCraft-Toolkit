@@ -685,15 +685,14 @@ body {
     gap: 0.75rem;
 }
 
-/* Individual Image item cards - Universal 3-column grid with balanced action buttons */
+/* Individual Image item cards - Clean 2-row layout */
 .image-item-node {
-    display: grid;
-    grid-template-columns: 48px minmax(0, 1fr) 28px;
-    align-items: start;
+    display: flex;
+    flex-direction: column;
     width: 100%;
     min-width: 0;
     min-height: auto;
-    padding: 0.7rem 0.75rem 0.95rem 0.75rem;
+    padding: 0.7rem 0.75rem 0.8rem 0.75rem;
     gap: 0.55rem;
     background-color: var(--input-bg);
     border: 1px solid var(--border-color);
@@ -707,23 +706,29 @@ body {
     transform: translateX(2px);
 }
 
+/* Header row: Thumbnail + File Info + Controls */
+.node-header {
+    display: flex;
+    align-items: center;
+    gap: 0.65rem;
+    width: 100%;
+    min-width: 0;
+}
+
 .node-thumbnail {
-    grid-column: 1;
-    grid-row: 1;
     width: 48px;
     height: 48px;
     border-radius: var(--radius-sm);
     object-fit: cover;
     background-color: rgba(0, 0, 0, 0.2);
     border: 1px solid var(--border-color);
+    flex-shrink: 0;
 }
 
 .node-details {
-    grid-column: 2;
-    grid-row: 1;
+    flex: 1 1 0;
     min-width: 0;
-    width: 100%;
-    overflow: visible;
+    overflow: hidden;
 }
 
 .node-details h4 {
@@ -733,7 +738,7 @@ body {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    margin-bottom: 0.15rem;
+    margin-bottom: 0.2rem;
     padding-right: 0.25rem;
 }
 
@@ -783,22 +788,61 @@ body {
     white-space: nowrap;
 }
 
-.inline-quality-control {
-    max-width: none !important;
-    width: 100%;
-    margin-bottom: 6px !important;
+.node-controls {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.25rem;
+    flex-shrink: 0;
 }
 
-.node-details > div:last-child {
-    display: flex !important;
-    flex-wrap: wrap;
+/* Actions row: Quality Slider + Action Buttons (Full width from left under thumbnail) */
+.node-actions-row {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 0.45rem;
+}
+
+.inline-quality-control {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    max-width: none !important;
+    margin: 0 !important;
+}
+
+.inline-quality-label {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    font-weight: 600;
+    min-width: 48px;
+    flex-shrink: 0;
+}
+
+.inline-quality-slider {
+    flex: 1;
+    height: 4px;
+    cursor: pointer;
+}
+
+.inline-quality-badge {
+    font-size: 0.72rem;
+    padding: 0.1rem 0.35rem;
+    font-weight: 700;
+    background-color: var(--border-color);
+    flex-shrink: 0;
+}
+
+.node-action-buttons {
+    display: flex;
     align-items: center;
     width: 100%;
     gap: 0.35rem;
-    margin-bottom: 0.15rem;
 }
 
-.node-details > div:last-child .btn-crop-node {
+.node-action-buttons .btn-crop-node {
     flex: 1 1 0;
     width: auto;
     min-width: 0;
@@ -816,15 +860,16 @@ body {
     justify-content: center;
 }
 
-.node-details > div:last-child .btn-crop-node i {
+.node-action-buttons .btn-crop-node i {
     width: 11px !important;
     height: 11px !important;
     flex-shrink: 0;
 }
 
-.node-details > div:last-child .btn-crop-node:nth-child(4) {
+.node-action-buttons .btn-crop-node-reset {
+    color: #ef4444 !important;
+    padding: 0.25rem 0.4rem !important;
     flex: 0 0 auto;
-    width: 100%;
 }
 
 .light-theme .badge-dim {
@@ -846,20 +891,6 @@ body {
     background-color: rgba(37, 99, 235, 0.1);
     border-color: rgba(37, 99, 235, 0.2);
     color: #2563eb;
-}
-
-.node-controls {
-    grid-column: 3;
-    grid-row: 1;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-start;
-    align-items: center;
-    width: 28px;
-    border-top: 0;
-    padding-top: 0;
-    gap: 0.25rem;
-    flex-shrink: 0;
 }
 
 /* Icon button circles */
@@ -2858,19 +2889,6 @@ body {
 
     .preview-pagination .pagination-text {
         display: none;
-    }
-
-    .inline-quality-control {
-        position: relative;
-        left: -53px;
-        width: calc(100% + 53px) !important;
-        max-width: none !important;
-    }
-
-    .node-details>div:last-child {
-        position: relative;
-        left: -53px;
-        width: calc(100% + 53px);
     }
 }
 

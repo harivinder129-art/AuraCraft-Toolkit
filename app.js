@@ -1710,55 +1710,59 @@ function renderUploadedGrid() {
         const thumbSrc = fileObj.thumbUrl || fileObj.previewUrl || fileObj.dataUrl;
 
         item.innerHTML = `
-            <img src="${thumbSrc}" alt="${fileObj.name}" class="node-thumbnail" loading="lazy" decoding="async">
-            <div class="node-details">
-                <h4><span class="node-order" title="Upload order">${index + 1}</span>${fileObj.name}</h4>
-                <div class="node-meta" style="margin-bottom: 6px;">
-                    <span class="badge-dim">${fileObj.width} x ${fileObj.height} px</span>
-                    ${isEdited ? '<span class="badge cropped-badge">Edited</span>' : ''}
-                    <span class="meta-divider"></span>
-                    <span class="meta-text" title="Original File Size">${fileObj.sizeText}</span>
-                    <span class="meta-divider"></span>
-                    <span class="badge individual-pdf-size-badge" data-index="${index}" style="background-color: rgba(139, 92, 246, 0.08); color: var(--accent-solid); font-weight: 600;" title="Estimated PDF size for this page">
-                        <span class="size-label">Size:</span>
-                        <span class="size-number">${individualSize ? formatFileSize(individualSize).split(' ')[0] : '0'}</span>
-                        <span class="size-unit">${individualSize ? formatFileSize(individualSize).split(' ')[1] : 'KB'}</span>
-                    </span>
+            <div class="node-header">
+                <img src="${thumbSrc}" alt="${fileObj.name}" class="node-thumbnail" loading="lazy" decoding="async">
+                <div class="node-details">
+                    <h4><span class="node-order" title="Upload order">${index + 1}</span>${fileObj.name}</h4>
+                    <div class="node-meta">
+                        <span class="badge-dim">${fileObj.width} x ${fileObj.height} px</span>
+                        ${isEdited ? '<span class="badge cropped-badge">Edited</span>' : ''}
+                        <span class="meta-divider"></span>
+                        <span class="meta-text" title="Original File Size">${fileObj.sizeText}</span>
+                        <span class="meta-divider"></span>
+                        <span class="badge individual-pdf-size-badge" data-index="${index}" style="background-color: rgba(139, 92, 246, 0.08); color: var(--accent-solid); font-weight: 600;" title="Estimated PDF size for this page">
+                            <span class="size-label">Size:</span>
+                            <span class="size-number">${individualSize ? formatFileSize(individualSize).split(' ')[0] : '0'}</span>
+                            <span class="size-unit">${individualSize ? formatFileSize(individualSize).split(' ')[1] : 'KB'}</span>
+                        </span>
+                    </div>
                 </div>
-                
-                <!-- Per-Image Compression Slider -->
-                <div class="inline-quality-control" style="margin-bottom: 8px; display: flex; align-items: center; gap: 0.5rem; max-width: 250px;">
-                    <span style="font-size: 0.72rem; color: var(--text-secondary); font-weight: 600; min-width: 50px;">Quality:</span>
-                    <input type="range" class="inline-quality-slider" data-index="${index}" min="10" max="100" value="${currentQuality}" style="flex: 1; height: 4px; cursor: pointer;">
-                    <span class="badge inline-quality-badge" data-index="${index}" style="font-size: 0.72rem; padding: 0.1rem 0.35rem; font-weight: 700; background-color: var(--border-color);">${qualityLabel}</span>
-                </div>
-                
-                <div style="display: flex; gap: 0.4rem; align-items: center;">
-                    <button type="button" class="btn btn-secondary btn-crop-node" onclick="openEditInterface(${index})">
-                        <i data-lucide="sliders" style="width: 11px; height: 11px;"></i> Edit
+                <div class="node-controls">
+                    <button type="button" class="btn-circle" title="Move Up" ${isFirst ? 'disabled' : ''} onclick="swapFiles(${index}, ${index - 1})">
+                        <i data-lucide="chevron-up"></i>
                     </button>
-                    <button type="button" class="btn btn-secondary btn-crop-node" onclick="downloadSingleImage(${index})" title="Save page as image file">
-                        <i data-lucide="image" style="width: 11px; height: 11px;"></i> Save Image
+                    <button type="button" class="btn-circle btn-circle-delete" title="Remove image" onclick="removeFile(${index})">
+                        <i data-lucide="trash-2"></i>
                     </button>
-                    <button type="button" class="btn btn-secondary btn-crop-node" onclick="downloadSinglePDF(${index})" title="Save page as PDF file">
-                        <i data-lucide="file-text" style="width: 11px; height: 11px;"></i> Save PDF
+                    <button type="button" class="btn-circle" title="Move Down" ${isLast ? 'disabled' : ''} onclick="swapFiles(${index}, ${index + 1})">
+                        <i data-lucide="chevron-down"></i>
                     </button>
-                    ${isEdited ? `
-                    <button type="button" class="btn btn-tertiary btn-crop-node" style="color: #ef4444; padding: 0.25rem 0.4rem;" onclick="resetEdits(${index})">
-                        <i data-lucide="rotate-ccw" style="width: 11px; height: 11px;"></i> Reset
-                    </button>` : ''}
                 </div>
             </div>
-            <div class="node-controls">
-                <button type="button" class="btn-circle" title="Move Up" ${isFirst ? 'disabled' : ''} onclick="swapFiles(${index}, ${index - 1})">
-                    <i data-lucide="chevron-up"></i>
-                </button>
-                <button type="button" class="btn-circle btn-circle-delete" title="Remove image" onclick="removeFile(${index})">
-                    <i data-lucide="trash-2"></i>
-                </button>
-                <button type="button" class="btn-circle" title="Move Down" ${isLast ? 'disabled' : ''} onclick="swapFiles(${index}, ${index + 1})">
-                    <i data-lucide="chevron-down"></i>
-                </button>
+            
+            <div class="node-actions-row">
+                <!-- Per-Image Compression Slider -->
+                <div class="inline-quality-control">
+                    <span class="inline-quality-label">Quality:</span>
+                    <input type="range" class="inline-quality-slider" data-index="${index}" min="10" max="100" value="${currentQuality}">
+                    <span class="badge inline-quality-badge" data-index="${index}">${qualityLabel}</span>
+                </div>
+                
+                <div class="node-action-buttons">
+                    <button type="button" class="btn btn-secondary btn-crop-node" onclick="openEditInterface(${index})">
+                        <i data-lucide="sliders"></i> Edit
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-crop-node" onclick="downloadSingleImage(${index})" title="Save page as image file">
+                        <i data-lucide="image"></i> Save Image
+                    </button>
+                    <button type="button" class="btn btn-secondary btn-crop-node" onclick="downloadSinglePDF(${index})" title="Save page as PDF file">
+                        <i data-lucide="file-text"></i> Save PDF
+                    </button>
+                    ${isEdited ? `
+                    <button type="button" class="btn btn-tertiary btn-crop-node btn-crop-node-reset" onclick="resetEdits(${index})">
+                        <i data-lucide="rotate-ccw"></i> Reset
+                    </button>` : ''}
+                </div>
             </div>
         `;
 
