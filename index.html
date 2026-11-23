@@ -24,7 +24,7 @@
     <!-- JSZip library (Local/Offline) -->
     <script src="jszip.min.js"></script>
     <!-- Stylesheets -->
-    <link rel="stylesheet" href="styles.css?v=54">
+    <link rel="stylesheet" href="styles.css?v=63">
 
 </head>
 
@@ -64,184 +64,82 @@
                     <p class="tagline">Premium Client-Side Image &amp; PDF Studio</p>
                 </div>
             </div>
+
+            <!-- Header Action Buttons / Dropzone on the Right -->
+            <div class="header-actions" id="dropZone">
+                <input type="file" id="fileInput" multiple accept="image/*,.heic,.heif,.pdf,application/pdf"
+                    class="file-hidden">
+                <button type="button" class="btn btn-secondary" id="btnBrowse">
+                    <i data-lucide="image"></i> Browse Files
+                </button>
+                <button type="button" class="btn btn-secondary" id="btnPaste"
+                    title="Paste Image or PDF from Clipboard (Ctrl+V)">
+                    <i data-lucide="clipboard"></i> Paste Clipboard
+                </button>
+            </div>
         </div>
     </header>
 
     <main class="app-container">
-        <div class="grid-layout">
-            <!-- Left Side: Source/Images Management -->
-            <section class="workspace-left">
-                <!-- Dropzone area -->
-                <div class="glass-card upload-card" id="dropZone">
-                    <input type="file" id="fileInput" multiple accept="image/*,.heic,.heif,.pdf,application/pdf"
-                        class="file-hidden">
-                    <div class="drop-illustration">
-                        <div class="drop-circle">
-                            <i data-lucide="upload-cloud" class="upload-icon"></i>
+        <!-- Unified Workspace Card: Uploaded Items & Preview in One Container -->
+        <div class="glass-card list-card unified-workspace-card" id="imageListCard" style="display: none;" data-active-tab="files">
+            <!-- Mobile-Only 50/50 Balanced Segmented View Toggle Switcher -->
+            <div class="mobile-segmented-wrapper">
+                <div class="mobile-segmented-pill">
+                    <button type="button" class="mobile-tab-btn active" id="tabBtnFiles" aria-label="View Uploaded Items">
+                        <i data-lucide="layers" class="tab-icon"></i>
+                        <span>Uploaded Items (<span id="fileCount">0</span>)</span>
+                    </button>
+                    <button type="button" class="mobile-tab-btn" id="tabBtnPreview" aria-label="View Preview">
+                        <i data-lucide="eye" class="tab-icon"></i>
+                        <span>Preview</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Unified Single-Line Header (One continuous divider line across the entire card) -->
+            <div class="unified-workspace-header">
+                <!-- Left Column Header: Title on Left, Total Size + Clear All on Right -->
+                <div class="header-col-left">
+                    <div class="header-title-group desktop-only-title">
+                        <i data-lucide="layers" class="title-icon"></i>
+                        <h2>Uploaded Items (<span id="desktopFileCount">0</span>)</h2>
+                    </div>
+                    <div class="header-actions-group">
+                        <div class="total-estimate-size-container" id="sizeIndicatorGroup" style="display: none;">
+                            <i data-lucide="hard-drive" class="total-size-icon"></i>
+                            <span class="badge size-value-badge" id="estimatedPdfSize">
+                                <span class="size-label">Total Estimate Size:</span>
+                                <span class="size-number">0</span>
+                                <span class="size-unit">KB</span>
+                            </span>
                         </div>
-                    </div>
-                    <div class="drop-text">
-                        <h3>Drag &amp; Drop or Paste your images or PDFs</h3>
-                        <p class="sub-text">Supports JPEG, PNG, WebP, SVG, GIF, HEIC, and PDF &bull; Press <kbd
-                                class="kbd-badge">Ctrl+V</kbd> to paste</p>
-                    </div>
-                    <div class="upload-actions">
-                        <button type="button" class="btn btn-secondary" id="btnBrowse">
-                            <i data-lucide="image"></i> Browse Files
-                        </button>
-                        <button type="button" class="btn btn-secondary" id="btnPaste"
-                            title="Paste Image or PDF from Clipboard (Ctrl+V)">
-                            <i data-lucide="clipboard"></i> Paste Clipboard
+                        <button class="btn-clear-all" id="btnClearAll" title="Clear all files">
+                            <i data-lucide="trash-2"></i> Clear All
                         </button>
                     </div>
                 </div>
 
-                <!-- Image List/Reordering Deck -->
-                <div class="glass-card list-card" id="imageListCard" style="display: none;">
-                    <div class="card-header">
-                        <div class="header-title-group">
-                            <i data-lucide="layers" class="title-icon"></i>
-                            <h2>Uploaded Items (<span id="fileCount">0</span>)</h2>
-                        </div>
-                        <div class="header-actions-group">
-                            <div class="total-estimate-size-container" id="sizeIndicatorGroup" style="display: none;">
-                                <i data-lucide="hard-drive" class="total-size-icon"></i>
-                                <span class="badge size-value-badge" id="estimatedPdfSize">
-                                    <span class="size-label">Total Estimate Size:</span>
-                                    <span class="size-number">0</span>
-                                    <span class="size-unit">KB</span>
-                                </span>
-                            </div>
-                            <button class="btn-clear-all" id="btnClearAll" title="Clear all files">
-                                <i data-lucide="trash-2"></i> Clear All
-                            </button>
-                        </div>
+                <!-- Right Column Header: Preview Title -->
+                <div class="header-col-right desktop-preview-header">
+                    <div class="header-title-group">
+                        <i data-lucide="eye" class="title-icon"></i>
+                        <h2>Preview</h2>
                     </div>
+                </div>
+            </div>
 
+            <!-- Unified Content Grid (Side-by-side on PC, Tab-toggled on Mobile) -->
+            <div class="unified-workspace-grid">
+                <!-- Left Pane: Uploaded Items List -->
+                <div class="unified-pane unified-files-pane">
                     <div class="image-list-container" id="imageListContainer">
                         <!-- Uploaded items inserted here dynamically -->
                     </div>
                 </div>
-            </section>
 
-            <!-- Right Side: PDF Settings and Virtual Preview -->
-            <section class="workspace-right">
-                <!-- PDF Settings Deck -->
-                <div class="glass-card settings-card collapsed">
-                    <div class="card-header border-bottom collapsible-trigger" id="settingsHeader"
-                        style="cursor: pointer; user-select: none;">
-                        <div class="header-title-group">
-                            <i data-lucide="sliders" class="title-icon"></i>
-                            <h2>Advanced Settings</h2>
-                        </div>
-                        <i data-lucide="chevron-down" class="toggle-chevron" id="settingsChevron"
-                            style="transition: transform var(--transition-normal); width: 18px; height: 18px; color: var(--text-secondary);"></i>
-                    </div>
-
-                    <div class="settings-form">
-                        <!-- Page Size Selector -->
-                        <div class="setting-group">
-                            <label for="pageSize" class="setting-label">
-                                <span>Page Size</span>
-                                <span class="label-info" title="Choose original dimensions or paper standard"><i
-                                        data-lucide="help-circle"></i></span>
-                            </label>
-                            <div class="select-wrapper">
-                                <select id="pageSize" class="custom-select">
-                                    <option value="original" selected>Original Size (Exact Dimensions)</option>
-                                    <option value="a4">A4 (210 x 297 mm)</option>
-                                    <option value="letter">US Letter (8.5" x 11")</option>
-                                    <option value="legal">US Legal (8.5" x 14")</option>
-                                    <option value="a3">A3 (297 x 420 mm)</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <!-- Orientation Tab Selectors (Only used when standard sizes are chosen) -->
-                        <div class="setting-group" id="orientationGroup" style="display: none;">
-                            <label class="setting-label">Orientation</label>
-                            <div class="tab-selector">
-                                <button type="button" class="tab-btn active" data-value="auto">
-                                    <i data-lucide="refresh-cw"></i> Auto-Detect
-                                </button>
-                                <button type="button" class="tab-btn" data-value="portrait">
-                                    <i data-lucide="file-text"></i> Portrait
-                                </button>
-                                <button type="button" class="tab-btn" data-value="landscape">
-                                    <i data-lucide="file-text" class="rotate-90"></i> Landscape
-                                </button>
-                            </div>
-                        </div>
-
-                        <!-- Margins Selector -->
-                        <div class="setting-group">
-                            <label class="setting-label">Page Margins</label>
-                            <div class="tab-selector margin-selector">
-                                <button type="button" class="tab-btn active" data-value="none">
-                                    None
-                                </button>
-                                <button type="button" class="tab-btn" data-value="thin">
-                                    Thin (0.5 in)
-                                </button>
-                                <button type="button" class="tab-btn" data-value="normal">
-                                    Normal (1.0 in)
-                                </button>
-                            </div>
-                        </div>
-
-                        <!-- Image Fitting Options (Only used when standard sizes are chosen) -->
-                        <div class="setting-group" id="imageFittingGroup" style="display: none;">
-                            <label for="imageFitting" class="setting-label">Image Placement</label>
-                            <div class="select-wrapper">
-                                <select id="imageFitting" class="custom-select">
-                                    <option value="fit" selected>Fit Within Margins (Keep Proportion)</option>
-                                    <option value="fill">Fill Entire Page (Crop if Needed)</option>
-                                    <option value="stretch">Stretch to Fill (No Crop, Ignores Ratio)</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <!-- Watermark / Stamping -->
-                        <div class="setting-group border-top pt-4">
-                            <label class="setting-label">
-                                <i data-lucide="type" class="title-icon"
-                                    style="width: 14px; height: 14px; margin-right: 4px;"></i>
-                                Document Watermark
-                            </label>
-                            <input type="text" id="watermarkText" class="custom-input" placeholder="e.g. CONFIDENTIAL">
-                            <p class="sub-text mt-2" style="font-size: 0.75rem;">Text will be stamped diagonally across
-                                every page.</p>
-                        </div>
-
-                        <!-- Security / Encryption -->
-                        <div class="setting-group border-top pt-4">
-                            <div class="setting-label-between" style="cursor: pointer;" id="togglePasswordBtn">
-                                <label class="setting-label" style="cursor: pointer;">
-                                    <i data-lucide="lock" class="title-icon"
-                                        style="width: 14px; height: 14px; margin-right: 4px;"></i>
-                                    Password Protection
-                                </label>
-                                <input type="checkbox" id="enablePassword" class="custom-checkbox"
-                                    style="width: 18px; height: 18px; cursor: pointer;">
-                            </div>
-                            <div id="passwordInputContainer" style="display: none; margin-top: 0.75rem;">
-                                <input type="password" id="pdfPassword" class="custom-input"
-                                    placeholder="Enter PDF password...">
-                                <p class="sub-text mt-2" style="font-size: 0.75rem; margin-top: 0.5rem;">PDF will be
-                                    encrypted. Password is required to open the document.</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Document Layout Live Preview -->
-                <div class="glass-card preview-card">
-                    <div class="card-header border-bottom">
-                        <div class="header-title-group">
-                            <i data-lucide="eye" class="title-icon"></i>
-                            <h2>Document Layout Preview</h2>
-                        </div>
-                    </div>
+                <!-- Right Pane: Document Layout Preview -->
+                <div class="unified-pane unified-preview-pane">
                     <div class="preview-workspace">
                         <div class="virtual-preview-canvas" id="virtualPreviewCanvas">
                             <!-- Live layout is rendered inside this container dynamically -->
@@ -264,7 +162,7 @@
                         </div>
                     </div>
                 </div>
-            </section>
+            </div>
         </div>
     </main>
 
@@ -280,6 +178,114 @@
 
     <!-- Bottom Sticky Action Bar -->
     <div class="bottom-sticky-bar" id="bottomStickyBar">
+        <!-- PDF Settings Deck (Docked just above sticky bar) -->
+        <div class="glass-card settings-card collapsed">
+            <div class="card-header border-bottom collapsible-trigger" id="settingsHeader"
+                style="cursor: pointer; user-select: none;">
+                <div class="header-title-group">
+                    <i data-lucide="sliders" class="title-icon"></i>
+                    <h2>Advanced Settings</h2>
+                </div>
+                <i data-lucide="chevron-up" class="toggle-chevron" id="settingsChevron"
+                    style="transition: transform var(--transition-normal); width: 18px; height: 18px; color: var(--text-secondary);"></i>
+            </div>
+
+            <div class="settings-form">
+                <!-- Page Size Selector -->
+                <div class="setting-group">
+                    <label for="pageSize" class="setting-label">
+                        <span>Page Size</span>
+                        <span class="label-info" title="Choose original dimensions or paper standard"><i
+                                data-lucide="help-circle"></i></span>
+                    </label>
+                    <div class="select-wrapper">
+                        <select id="pageSize" class="custom-select">
+                            <option value="original" selected>Original Size (Exact Dimensions)</option>
+                            <option value="a4">A4 (210 x 297 mm)</option>
+                            <option value="letter">US Letter (8.5" x 11")</option>
+                            <option value="legal">US Legal (8.5" x 14")</option>
+                            <option value="a3">A3 (297 x 420 mm)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Orientation Tab Selectors (Only used when standard sizes are chosen) -->
+                <div class="setting-group" id="orientationGroup" style="display: none;">
+                    <label class="setting-label">Orientation</label>
+                    <div class="tab-selector">
+                        <button type="button" class="tab-btn active" data-value="auto">
+                            <i data-lucide="refresh-cw"></i> Auto-Detect
+                        </button>
+                        <button type="button" class="tab-btn" data-value="portrait">
+                            <i data-lucide="file-text"></i> Portrait
+                        </button>
+                        <button type="button" class="tab-btn" data-value="landscape">
+                            <i data-lucide="file-text" class="rotate-90"></i> Landscape
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Margins Selector -->
+                <div class="setting-group">
+                    <label class="setting-label">Page Margins</label>
+                    <div class="tab-selector margin-selector">
+                        <button type="button" class="tab-btn active" data-value="none">
+                            None
+                        </button>
+                        <button type="button" class="tab-btn" data-value="thin">
+                            Thin (0.5 in)
+                        </button>
+                        <button type="button" class="tab-btn" data-value="normal">
+                            Normal (1.0 in)
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Image Fitting Options (Only used when standard sizes are chosen) -->
+                <div class="setting-group" id="imageFittingGroup" style="display: none;">
+                    <label for="imageFitting" class="setting-label">Image Placement</label>
+                    <div class="select-wrapper">
+                        <select id="imageFitting" class="custom-select">
+                            <option value="fit" selected>Fit Within Margins (Keep Proportion)</option>
+                            <option value="fill">Fill Entire Page (Crop if Needed)</option>
+                            <option value="stretch">Stretch to Fill (No Crop, Ignores Ratio)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Watermark / Stamping -->
+                <div class="setting-group border-top pt-4">
+                    <label class="setting-label">
+                        <i data-lucide="type" class="title-icon"
+                            style="width: 14px; height: 14px; margin-right: 4px;"></i>
+                        Document Watermark
+                    </label>
+                    <input type="text" id="watermarkText" class="custom-input" placeholder="e.g. CONFIDENTIAL">
+                    <p class="sub-text mt-2" style="font-size: 0.75rem;">Text will be stamped diagonally across
+                        every page.</p>
+                </div>
+
+                <!-- Security / Encryption -->
+                <div class="setting-group border-top pt-4">
+                    <div class="setting-label-between" style="cursor: pointer;" id="togglePasswordBtn">
+                        <label class="setting-label" style="cursor: pointer;">
+                            <i data-lucide="lock" class="title-icon"
+                                style="width: 14px; height: 14px; margin-right: 4px;"></i>
+                            Password Protection
+                        </label>
+                        <input type="checkbox" id="enablePassword" class="custom-checkbox"
+                            style="width: 18px; height: 18px; cursor: pointer;">
+                    </div>
+                    <div id="passwordInputContainer" style="display: none; margin-top: 0.75rem;">
+                        <input type="password" id="pdfPassword" class="custom-input"
+                            placeholder="Enter PDF password...">
+                        <p class="sub-text mt-2" style="font-size: 0.75rem; margin-top: 0.5rem;">PDF will be
+                            encrypted. Password is required to open the document.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <div class="sticky-bar-container">
             <!-- Left Side: Selection status & Progress -->
             <div class="sticky-status-info">
@@ -568,7 +574,7 @@
     <canvas id="appCompressionCanvas" style="display:none;"></canvas>
 
     <!-- App JavaScript -->
-    <script src="app.js?v=69"></script>
+    <script src="app.js?v=72"></script>
 </body>
 
 </html>

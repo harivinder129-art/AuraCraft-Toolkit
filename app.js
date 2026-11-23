@@ -185,9 +185,38 @@ function hasFiles(types) {
 }
 
 function initEventListeners() {
+    const tabBtnFiles = document.getElementById('tabBtnFiles');
+    const tabBtnPreview = document.getElementById('tabBtnPreview');
+    if (tabBtnFiles && tabBtnPreview && DOM.imageListCard) {
+        tabBtnFiles.addEventListener('click', () => {
+            DOM.imageListCard.setAttribute('data-active-tab', 'files');
+            tabBtnFiles.classList.add('active');
+            tabBtnPreview.classList.remove('active');
+        });
+
+        tabBtnPreview.addEventListener('click', () => {
+            DOM.imageListCard.setAttribute('data-active-tab', 'preview');
+            tabBtnPreview.classList.add('active');
+            tabBtnFiles.classList.remove('active');
+            if (typeof renderVirtualLayoutPreview === 'function') {
+                renderVirtualLayoutPreview();
+            }
+        });
+    }
+
     if (DOM.settingsHeader && DOM.settingsCard) {
-        DOM.settingsHeader.addEventListener('click', () => {
+        DOM.settingsHeader.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (typeof closeAllStickyDropdowns === 'function') {
+                closeAllStickyDropdowns();
+            }
             DOM.settingsCard.classList.toggle('collapsed');
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!DOM.settingsCard.classList.contains('collapsed') && !DOM.settingsCard.contains(e.target)) {
+                DOM.settingsCard.classList.add('collapsed');
+            }
         });
     }
 
@@ -1609,10 +1638,20 @@ function clearAllFiles() {
    ========================================================================== */
 function updateUIState() {
     const fileCount = STATE.files.length;
-    DOM.fileCount.textContent = fileCount;
+    if (DOM.fileCount) DOM.fileCount.textContent = fileCount;
+    const desktopCount = document.getElementById('desktopFileCount');
+    if (desktopCount) desktopCount.textContent = fileCount;
+
+    const tabBtnFiles = document.getElementById('tabBtnFiles');
+    const tabBtnPreview = document.getElementById('tabBtnPreview');
 
     if (fileCount === 0) {
-        DOM.imageListCard.style.display = 'none';
+        if (DOM.imageListCard) {
+            DOM.imageListCard.style.display = 'none';
+            DOM.imageListCard.setAttribute('data-active-tab', 'files');
+        }
+        if (tabBtnFiles) tabBtnFiles.classList.add('active');
+        if (tabBtnPreview) tabBtnPreview.classList.remove('active');
         if (DOM.btnConvert) DOM.btnConvert.disabled = true;
 
         if (DOM.btnStickyExportPdf) DOM.btnStickyExportPdf.disabled = true;
@@ -2003,6 +2042,7 @@ function toggleStickyDropdown(dropdownEl) {
     const wasOpen = dropdownEl.classList.contains('is-open');
     closeAllStickyDropdowns();
     if (!wasOpen) {
+        if (DOM.settingsCard) DOM.settingsCard.classList.add('collapsed');
         dropdownEl.classList.add('is-open');
         const trigger = dropdownEl.querySelector('.sticky-action-btn');
         if (trigger) trigger.setAttribute('aria-expanded', 'true');
