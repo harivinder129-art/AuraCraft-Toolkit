@@ -269,7 +269,7 @@ body {
     margin: 0 auto;
 }
 
-@media (max-width: 1024px) {
+@media (max-width: 1000px) {
     .grid-layout {
         grid-template-columns: 1fr;
     }
@@ -549,8 +549,8 @@ body {
     box-shadow: 0 3px 12px var(--accent-glow);
 }
 
-/* Mobile Toggle Adaptations (<= 640px) */
-@media (max-width: 640px) {
+/* Workspace Collapse Adaptations (<= 1000px: Uploaded Files & Preview collapse into tabs) */
+@media (max-width: 1000px) {
     .mobile-segmented-wrapper {
         display: flex !important;
     }
