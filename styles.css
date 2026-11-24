@@ -485,6 +485,7 @@ body {
 .unified-preview-pane .preview-workspace {
     flex: 1;
     width: 100%;
+    height: min(72vh, 680px);
     min-height: 480px;
     max-height: min(72vh, 680px);
     background-color: var(--bg-primary);
@@ -607,12 +608,6 @@ body {
 
     .unified-files-pane .image-list-container {
         max-height: min(68vh, 600px);
-    }
-
-    .unified-preview-pane .preview-workspace {
-        min-height: 360px;
-        max-height: min(68vh, 600px);
-        height: min(68vh, 600px);
     }
 }
 
@@ -2716,13 +2711,6 @@ body {
         max-height: min(68vh, 620px);
         overflow-y: auto;
         padding-right: 0;
-    }
-
-    .preview-workspace {
-        min-height: 320px;
-        max-height: min(68vh, 620px);
-        height: min(68vh, 620px);
-        padding: 0.75rem;
     }
 
     .card-footer {
