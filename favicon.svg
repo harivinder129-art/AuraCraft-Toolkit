@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <!-- Background Gradient: AuraCraft vibrant violet-indigo to electric cyan -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4f46e5" />
+      <stop offset="45%" stop-color="#7c3aed" />
+      <stop offset="100%" stop-color="#06b6d4" />
+    </linearGradient>
+
+    <!-- Glass Specular Highlight -->
+    <linearGradient id="glassGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.4" />
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.05" />
+    </linearGradient>
+
+    <!-- Document Sheet Gradient -->
+    <linearGradient id="sheetGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#f8fafc" />
+    </linearGradient>
+
+    <!-- Photo Sun Gradient -->
+    <linearGradient id="sunGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fbbf24" />
+      <stop offset="100%" stop-color="#f43f5e" />
+    </linearGradient>
+
+    <!-- Mountain Gradients -->
+    <linearGradient id="mountainGrad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#4338ca" />
+    </linearGradient>
+
+    <linearGradient id="mountainGrad2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6" />
+      <stop offset="100%" stop-color="#6d28d9" />
+    </linearGradient>
+
+    <!-- PDF Badge Gradient -->
+    <linearGradient id="pdfBadgeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ef4444" />
+      <stop offset="100%" stop-color="#dc2626" />
+    </linearGradient>
+
+    <!-- Fold Corner Gradient -->
+    <linearGradient id="foldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#cbd5e1" />
+      <stop offset="100%" stop-color="#94a3b8" />
+    </linearGradient>
+
+    <!-- Drop Shadows -->
+    <filter id="shadowSquircle" x="-10%" y="-10%" width="120%" height="125%">
+      <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#4f46e5" flood-opacity="0.45" />
+    </filter>
+    <filter id="shadowSheet" x="-15%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="12" stdDeviation="14" flood-color="#0f172a" flood-opacity="0.25" />
+    </filter>
+    <filter id="shadowBadge" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#b91c1c" flood-opacity="0.4" />
+    </filter>
+
+    <clipPath id="sheetClip">
+      <rect x="146" y="152" width="220" height="176" rx="14" />
+    </clipPath>
+  </defs>
+
+  <!-- Squircle Base Icon Container -->
+  <rect x="24" y="24" width="464" height="464" rx="108" fill="url(#bgGrad)" filter="url(#shadowSquircle)" />
+  
+  <!-- Subtle Glass Specular Inner Glow -->
+  <rect x="26" y="26" width="460" height="460" rx="106" fill="none" stroke="url(#glassGrad)" stroke-width="4" />
+
+  <!-- The Document Sheet with Folded Corner -->
+  <path d="M 148 96 L 324 96 L 388 160 L 388 392 A 20 20 0 0 1 368 412 L 148 412 A 20 20 0 0 1 128 392 L 128 116 A 20 20 0 0 1 148 96 Z" 
+        fill="url(#sheetGrad)" 
+        filter="url(#shadowSheet)" />
+
+  <!-- Folded Corner Flap -->
+  <path d="M 324 96 L 324 146 A 14 14 0 0 0 338 160 L 388 160 Z" 
+        fill="url(#foldGrad)" />
+
+  <!-- Inner Picture Window (Image representation) -->
+  <g clip-path="url(#sheetClip)">
+    <!-- Photo Sky -->
+    <rect x="146" y="152" width="220" height="176" rx="14" fill="#0f172a" />
+    <rect x="146" y="152" width="220" height="176" rx="14" fill="url(#bgGrad)" opacity="0.2" />
+
+    <!-- Radiant Glowing Sun -->
+    <circle cx="292" cy="198" r="26" fill="url(#sunGrad)" />
+
+    <!-- Mountain Ranges -->
+    <!-- Back Mountain -->
+    <polygon points="120,328 212,216 304,328" fill="url(#mountainGrad2)" />
+    <!-- Front Mountain -->
+    <polygon points="204,328 274,238 376,328" fill="url(#mountainGrad1)" />
+  </g>
+
+  <!-- Border around Photo Window -->
+  <rect x="146" y="152" width="220" height="176" rx="14" fill="none" stroke="#e2e8f0" stroke-width="2" />
+
+  <!-- Sleek Red PDF Badge -->
+  <g filter="url(#shadowBadge)">
+    <rect x="250" y="348" width="130" height="46" rx="10" fill="url(#pdfBadgeGrad)" />
+    <text x="315" y="379" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" 
+          font-size="22" font-weight="900" fill="#ffffff" letter-spacing="2" text-anchor="middle">PDF</text>
+  </g>
+</svg>
