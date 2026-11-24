@@ -3372,6 +3372,12 @@ body {
     z-index: 860;
 }
 
+#stickyPdfMenu {
+    left: 0;
+    right: auto;
+    transform-origin: bottom left;
+}
+
 .sticky-menu-card::after {
     content: '';
     position: absolute;
@@ -3575,6 +3581,12 @@ body {
         padding: 0.45rem !important;
         border-radius: var(--radius-md) !important;
         transform-origin: bottom right !important;
+    }
+
+    #stickyPdfMenu {
+        left: 0 !important;
+        right: auto !important;
+        transform-origin: bottom left !important;
     }
 
     .sticky-menu-btn {
