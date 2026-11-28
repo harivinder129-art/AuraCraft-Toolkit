@@ -1,9 +1,11 @@
-const CACHE_NAME = 'pictopdf-v2';
+const CACHE_NAME = 'pictopdf-v9';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
-  './css/styles.css?v=69',
-  './js/app.js?v=73',
+  './css/styles.css?v=75',
+  './js/app.js?v=78',
+  './js/modules/state.js',
+  './js/modules/theme.js',
   './manifest.json',
   './assets/favicon.svg',
   './assets/icons/icon-192.png',
@@ -41,7 +43,12 @@ self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
-      return cachedResponse || fetch(event.request);
-    }).catch(() => fetch(event.request))
+      if (cachedResponse) return cachedResponse;
+      return fetch(event.request).catch(() => {
+        if (event.request.mode === 'navigate') {
+          return caches.match('./index.html');
+        }
+      });
+    })
   );
 });

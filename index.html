@@ -25,7 +25,7 @@
     <script src="lib/jszip.min.js"></script>
     <!-- PWA & Mobile Meta Tags -->
     <link rel="manifest" href="manifest.json">
-    <meta name="theme-color" content="#08080c">
+    <meta name="theme-color" content="#0b0b0d">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -37,7 +37,7 @@
     <link rel="icon" type="image/png" sizes="192x192" href="assets/icons/icon-192.png">
 
     <!-- Stylesheets -->
-    <link rel="stylesheet" href="css/styles.css?v=69">
+    <link rel="stylesheet" href="css/styles.css?v=75">
 
 </head>
 
@@ -45,14 +45,22 @@
     <script>
         // Immediate theme preference initialization to prevent flash
         (function () {
-            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-            if (!prefersDark) {
+            const paramTheme = new URLSearchParams(window.location.search).get('theme');
+            let stored = null;
+            try { stored = localStorage.getItem('pictopdf_theme'); } catch (_) {}
+            const useDark = (paramTheme === 'dark' || paramTheme === 'light')
+                ? paramTheme === 'dark'
+                : (stored === 'dark' || stored === 'light')
+                    ? stored === 'dark'
+                    : window.matchMedia('(prefers-color-scheme: dark)').matches;
+            if (!useDark) {
                 document.body.classList.remove('dark-theme');
                 document.body.classList.add('light-theme');
+                const meta = document.querySelector('meta[name="theme-color"]');
+                if (meta) meta.setAttribute('content', '#f2f2f7');
             }
         })();
     </script>
-    <div class="glow-bg" id="glowBg"></div>
 
     <!-- Full-Screen Drop Anywhere Overlay -->
     <div class="global-drop-overlay" id="globalDropOverlay" style="display: none;">
@@ -82,6 +90,10 @@
             <div class="header-actions" id="dropZone">
                 <input type="file" id="fileInput" multiple accept="image/*,.heic,.heif,.pdf,application/pdf"
                     class="file-hidden">
+                <button type="button" class="btn btn-secondary btn-icon-only" id="btnThemeToggle"
+                    title="Switch Light / Night Theme" aria-label="Switch Light or Night Theme">
+                    <i data-lucide="sun"></i>
+                </button>
                 <button type="button" class="btn btn-secondary" id="btnBrowse">
                     <i data-lucide="image"></i> ADD Files
                 </button>
@@ -94,6 +106,33 @@
     </header>
 
     <main class="app-container">
+        <!-- Empty-State Hero Dropzone -->
+        <section class="empty-hero-wrapper" id="emptyStateHero">
+            <div class="glass-card empty-hero-card" id="heroDropTarget">
+                <div class="empty-hero-icon">
+                    <i data-lucide="file-up"></i>
+                </div>
+                <div class="empty-hero-copy">
+                    <h2>Drop images or PDFs to get started</h2>
+                    <p>Arrange pages, crop or filter, adjust quality, and export cleanly offline.</p>
+                </div>
+                <div class="empty-hero-actions">
+                    <button type="button" class="btn btn-primary" id="heroBtnBrowse">
+                        <i data-lucide="folder-open"></i> Choose Files
+                    </button>
+                    <button type="button" class="btn btn-secondary" id="heroBtnPaste"
+                        title="Paste Image or PDF from Clipboard (Ctrl+V)">
+                        <i data-lucide="clipboard"></i> Paste <span class="kbd-hint">Ctrl+V</span>
+                    </button>
+                </div>
+                <div class="empty-hero-meta">
+                    <span class="hero-meta-pill">JPG · PNG · WebP · HEIC · PDF</span>
+                    <span class="hero-meta-dot" aria-hidden="true">•</span>
+                    <span class="hero-meta-pill"><i data-lucide="shield-check"></i> 100% Local Processing</span>
+                </div>
+            </div>
+        </section>
+
         <!-- Unified Workspace Card: Uploaded Items & Preview in One Container -->
         <div class="glass-card list-card unified-workspace-card" id="imageListCard" style="display: none;"
             data-active-tab="files">
@@ -252,6 +291,26 @@
                 <div class="setting-group">
                     <label for="watermarkText" class="setting-label">Watermark</label>
                     <input type="text" id="watermarkText" class="custom-input" placeholder="e.g. CONFIDENTIAL">
+                </div>
+
+                <!-- Batch Quality Preset -->
+                <div class="setting-group">
+                    <label for="globalQuality" class="setting-label">Quality</label>
+                    <div class="select-wrapper">
+                        <select id="globalQuality" class="custom-select">
+                            <option value="100" selected>Original (100%)</option>
+                            <option value="85">High (85%)</option>
+                            <option value="70">Balanced (70%)</option>
+                            <option value="50">Compact (50%)</option>
+                            <option value="custom" disabled hidden>Custom</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Custom Output File Name -->
+                <div class="setting-group">
+                    <label for="outputFilename" class="setting-label">File Name</label>
+                    <input type="text" id="outputFilename" class="custom-input" placeholder="pictopdf_compiled">
                 </div>
 
                 <!-- Security / Encryption -->
@@ -528,7 +587,7 @@
                             <svg id="perspectiveSvg"
                                 style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; display: none; z-index: 40;">
                                 <polygon id="perspectivePolygon" points="0,0 100,0 100,100 0,100"
-                                    style="fill:rgba(37, 99, 235, 0.2);stroke:rgba(255,255,255,0.85);stroke-width:2;stroke-dasharray:4 4;" />
+                                    style="fill:rgba(10, 132, 255, 0.16);stroke:rgba(255,255,255,0.9);stroke-width:2;stroke-dasharray:4 4;" />
                             </svg>
                             <div id="perspectiveHandles"
                                 style="display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 50;">
@@ -545,7 +604,7 @@
                             title="Full Screen Crop"><i data-lucide="maximize" style="width: 16px; height: 16px;"></i>
                             Full View</button>
                         <button type="button" class="btn btn-secondary" id="btnCancelEdit">Cancel</button>
-                        <button type="button" class="btn btn-primary btn-glow-active" id="btnApplyEdit">Apply
+                        <button type="button" class="btn btn-primary" id="btnApplyEdit">Apply
                             Edits</button>
                     </div>
                 </div>
@@ -557,7 +616,7 @@
     <canvas id="appCompressionCanvas" style="display:none;"></canvas>
 
     <!-- App JavaScript -->
-    <script type="module" src="js/app.js?v=73"></script>
+    <script type="module" src="js/app.js?v=78"></script>
 
     <!-- PWA Service Worker Registration -->
     <script>

@@ -3,7 +3,7 @@
    ========================================================================== */
 
 import { STATE, DOM, PAGE_PRESETS, MARGIN_SIZES } from './modules/state.js';
-import { initTheme, applyTheme, toggleTheme } from './modules/theme.js';
+import { initTheme, toggleTheme } from './modules/theme.js';
 
 // Make jsPDF & PDF.js worker available via standard ES global or UMD
 const { jsPDF } = window.jspdf;
@@ -75,6 +75,14 @@ function initEventListeners() {
 
     DOM.fileInput.addEventListener('change', handleFileSelection);
 
+    if (DOM.btnThemeToggle) {
+        DOM.btnThemeToggle.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            toggleTheme();
+        });
+    }
+
     if (DOM.btnBrowse) {
         DOM.btnBrowse.addEventListener('click', (e) => {
             e.preventDefault();
@@ -85,6 +93,37 @@ function initEventListeners() {
 
     if (DOM.btnPaste) {
         DOM.btnPaste.addEventListener('click', handlePasteButtonClick);
+    }
+
+    if (DOM.heroBtnBrowse) {
+        DOM.heroBtnBrowse.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            DOM.fileInput.click();
+        });
+    }
+
+    if (DOM.heroBtnPaste) {
+        DOM.heroBtnPaste.addEventListener('click', handlePasteButtonClick);
+    }
+
+    if (DOM.heroDropTarget) {
+        DOM.heroDropTarget.addEventListener('click', (e) => {
+            if (e.target.closest('button') || e.target.closest('input')) return;
+            DOM.fileInput.click();
+        });
+        ['dragenter', 'dragover'].forEach(eventName => {
+            DOM.heroDropTarget.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                DOM.heroDropTarget.classList.add('dragover');
+            }, false);
+        });
+        ['dragleave', 'drop'].forEach(eventName => {
+            DOM.heroDropTarget.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                DOM.heroDropTarget.classList.remove('dragover');
+            }, false);
+        });
     }
 
     document.addEventListener('paste', handlePasteEvent);
@@ -193,8 +232,6 @@ function initEventListeners() {
         });
     }
 
-    setupSwitchSelectors();
-
     if (DOM.togglePasswordBtn && DOM.enablePassword && DOM.passwordInputContainer && DOM.pdfPassword) {
         DOM.togglePasswordBtn.addEventListener('click', (e) => {
             if (e.target !== DOM.enablePassword) {
@@ -230,10 +267,24 @@ function initEventListeners() {
         });
     }
 
+    if (DOM.globalQuality) {
+        DOM.globalQuality.addEventListener('change', (e) => {
+            const val = parseInt(e.target.value, 10);
+            if (!isNaN(val)) {
+                applyBatchQuality(val);
+            }
+        });
+    }
+
+    if (DOM.outputFilename) {
+        DOM.outputFilename.addEventListener('input', (e) => {
+            STATE.settings.outputFilename = e.target.value;
+            STATE.compiledCache = null;
+        });
+    }
+
     DOM.prevPreview.addEventListener('click', () => navigatePreview(-1));
     DOM.nextPreview.addEventListener('click', () => navigatePreview(1));
-
-    if (DOM.btnConvert) DOM.btnConvert.addEventListener('click', convertImagesToPDF);
 
     // Bottom Sticky Action Bar Events
     if (DOM.btnStickyExportPdf) {
@@ -287,10 +338,40 @@ function initEventListeners() {
         }
     });
 
-    // Dismiss sticky dropdowns on Escape key
+    // Global desktop keyboard shortcuts
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             closeAllStickyDropdowns();
+            if (DOM.settingsCard && !DOM.settingsCard.classList.contains('collapsed')) {
+                DOM.settingsCard.classList.add('collapsed');
+                if (DOM.settingsHeader) DOM.settingsHeader.classList.remove('active');
+            }
+            return;
+        }
+
+        const isEditOpen = DOM.editModal && DOM.editModal.style.display !== 'none';
+        if (isEditOpen || STATE.files.length === 0 || STATE.compiling) return;
+
+        const target = e.target;
+        const tag = target && target.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (target && target.isContentEditable)) {
+            return;
+        }
+        if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+
+        if (e.key === 'ArrowLeft') {
+            if (STATE.activePageIdx > 0) {
+                e.preventDefault();
+                navigatePreview(-1);
+            }
+        } else if (e.key === 'ArrowRight') {
+            if (STATE.activePageIdx < STATE.files.length - 1) {
+                e.preventDefault();
+                navigatePreview(1);
+            }
+        } else if (e.key === 'Delete') {
+            e.preventDefault();
+            removeFile(STATE.activePageIdx);
         }
     });
 }
@@ -316,18 +397,6 @@ function setupTabSelectors() {
     });
 }
 
-function setupSwitchSelectors() {
-    const options = document.querySelectorAll('.switch-option');
-    options.forEach(opt => {
-        opt.addEventListener('click', () => {
-            options.forEach(o => o.classList.remove('active'));
-            opt.classList.add('active');
-            STATE.settings.mergeMode = opt.getAttribute('data-value');
-            updateUIState();
-        });
-    });
-}
-
 /* ==========================================================================
    File Reading & Loading State Mechanics
    ========================================================================== */
@@ -341,8 +410,10 @@ function handleFileSelection(e) {
 function applyLargeUploadDefaults() {
     STATE.settings.pageSize = 'original';
     STATE.settings.imageQuality = 100;
+    STATE.settings.batchQuality = '100';
 
     if (DOM.pageSize) DOM.pageSize.value = 'original';
+    if (DOM.globalQuality) DOM.globalQuality.value = '100';
     if (DOM.orientationGroup) DOM.orientationGroup.style.display = 'none';
     if (DOM.imageFittingGroup) DOM.imageFittingGroup.style.display = 'none';
 
@@ -490,27 +561,122 @@ function triggerPasteFeedback(count) {
     showToast(`Pasted ${count} item${count > 1 ? 's' : ''} from clipboard!`);
 }
 
-function showToast(message) {
+function showToast(message, options = {}) {
+    const {
+        type = 'info',
+        actionLabel = null,
+        onAction = null,
+        duration = actionLabel ? 6000 : (type === 'error' ? 4500 : 3200)
+    } = options;
+
     let toast = document.getElementById('appToast');
     if (!toast) {
         toast = document.createElement('div');
         toast.id = 'appToast';
         toast.className = 'toast-notification';
+        toast.setAttribute('role', 'status');
+        toast.setAttribute('aria-live', 'polite');
         document.body.appendChild(toast);
     }
-    toast.textContent = message;
-    toast.classList.add('show');
+
+    toast.className = 'toast-notification';
+    if (type === 'error' || type === 'success' || type === 'warning') {
+        toast.classList.add(`toast-${type}`);
+    }
+
+    toast.innerHTML = '';
+    const msgSpan = document.createElement('span');
+    msgSpan.className = 'toast-message';
+    msgSpan.textContent = message;
+    toast.appendChild(msgSpan);
+
+    if (actionLabel && typeof onAction === 'function') {
+        const actionBtn = document.createElement('button');
+        actionBtn.type = 'button';
+        actionBtn.className = 'toast-action-btn';
+        actionBtn.textContent = actionLabel;
+        actionBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (toast.timeoutId) clearTimeout(toast.timeoutId);
+            toast.classList.remove('show');
+            onAction();
+        });
+        toast.appendChild(actionBtn);
+    }
+
+    requestAnimationFrame(() => {
+        toast.classList.add('show');
+    });
 
     if (toast.timeoutId) clearTimeout(toast.timeoutId);
     toast.timeoutId = setTimeout(() => {
         toast.classList.remove('show');
-    }, 3200);
+    }, duration);
+}
+
+function getCustomBaseFilename(fallback) {
+    const raw = (STATE.settings.outputFilename || '').trim();
+    if (!raw) return fallback;
+    const cleaned = raw
+        .replace(/\.(pdf|zip|jpg|jpeg|png)$/i, '')
+        .replace(/[\\/:*?"<>|]+/g, '')
+        .trim();
+    return cleaned || fallback;
+}
+
+function syncGlobalQualityDropdown() {
+    if (!DOM.globalQuality) return;
+    if (STATE.files.length === 0) {
+        DOM.globalQuality.value = STATE.settings.batchQuality || '100';
+        return;
+    }
+    const firstQ = STATE.files[0].quality || 100;
+    const allSame = STATE.files.every(f => (f.quality || 100) === firstQ);
+    const presets = new Set([100, 85, 70, 50]);
+    if (allSame && presets.has(firstQ)) {
+        DOM.globalQuality.value = String(firstQ);
+        STATE.settings.batchQuality = String(firstQ);
+    } else {
+        DOM.globalQuality.value = 'custom';
+        STATE.settings.batchQuality = 'custom';
+    }
+}
+
+function applyBatchQuality(qualityVal) {
+    const q = Math.max(10, Math.min(100, qualityVal));
+    STATE.settings.imageQuality = q;
+    STATE.settings.batchQuality = String(q);
+    STATE.compiledCache = null;
+
+    if (STATE.files.length === 0) return;
+
+    STATE.files.forEach(fileObj => {
+        fileObj.quality = q;
+        fileObj.exactPdfSize = null;
+        fileObj.sizeFingerprint = null;
+    });
+
+    DOM.imageListContainer.querySelectorAll('.inline-quality-slider').forEach(slider => {
+        slider.value = q;
+    });
+    DOM.imageListContainer.querySelectorAll('.inline-quality-badge').forEach(badge => {
+        badge.textContent = q === 100 ? 'Original' : `${q}%`;
+    });
+    DOM.imageListContainer.querySelectorAll('.individual-pdf-size-badge').forEach(badge => {
+        updateSizeBadge(badge, 'Size', 'wait');
+    });
+    if (DOM.estimatedPdfSize) {
+        updateSizeBadge(DOM.estimatedPdfSize, 'Total Estimate Size', 'wait');
+    }
+
+    debouncedRecalculate(null, 50);
+    showToast(`Applied ${q === 100 ? 'Original (100%)' : q + '%'} quality to all ${STATE.files.length} item${STATE.files.length > 1 ? 's' : ''}`, { type: 'success' });
 }
 
 // Render every page of an imported PDF document into crisp, high-resolution image records
 async function processPdfFile(file) {
     if (typeof pdfjsLib === 'undefined') {
-        alert("PDF import failed: PDF.js library is not loaded.");
+        showToast("PDF import failed: PDF.js library is not loaded.", { type: 'error' });
         return [];
     }
 
@@ -576,7 +742,7 @@ async function processPdfFile(file) {
         return pageRecords;
     } catch (err) {
         console.error("Failed to parse PDF file:", file.name, err);
-        alert(`Failed to import PDF "${file.name}". The file might be password-protected or corrupted.`);
+        showToast(`Failed to import "${file.name}". It may be password-protected or corrupted.`, { type: 'error' });
         return [];
     }
 }
@@ -1129,7 +1295,7 @@ async function processSingleImageFile(file) {
         if (!isHeicConverted) {
             const heicToFn = window.HeicTo?.heicTo || window.HeicTo || window.heicTo;
             if (!heicToFn) {
-                alert("HEIC Conversion Failed: The transcoding library failed to load.");
+                showToast("HEIC Conversion Failed: Transcoding library not loaded.", { type: 'error' });
                 throw new Error("HEIC transcoder library is not loaded.");
             }
 
@@ -1143,7 +1309,7 @@ async function processSingleImageFile(file) {
                 if (convertedBlob) isHeicConverted = true;
             } catch (heicErr) {
                 console.error('HEIC fallback conversion failed for:', file.name, heicErr);
-                alert(`HEIC Transcoding Failed for "${file.name}": ${heicErr.message || heicErr}`);
+                showToast(`HEIC transcoding failed for "${file.name}".`, { type: 'error' });
                 throw heicErr;
             }
         }
@@ -1188,7 +1354,7 @@ async function processSingleImageFile(file) {
 
     if (!dims) {
         URL.revokeObjectURL(previewUrl);
-        alert("Unable to decode '" + fileToProcess.name + "'.");
+        showToast(`Unable to decode "${fileToProcess.name}".`, { type: 'error' });
         return [];
     }
 
@@ -1276,12 +1442,9 @@ async function processFiles(files) {
     });
 
     if (validFiles.length === 0) {
-        alert('Please drop or select valid image files (JPEG, PNG, WebP, HEIC) or PDF documents.');
+        showToast('Please select valid image files (JPEG, PNG, WebP, HEIC) or PDFs.', { type: 'error' });
         return;
     }
-
-    if (DOM.btnConvert) DOM.btnConvert.disabled = true;
-    const glowBgEl = document.getElementById('glowBg');
 
     let hasHeicOrPdf = false;
     validFiles.forEach(file => {
@@ -1291,10 +1454,7 @@ async function processFiles(files) {
         }
     });
 
-    // Disable continuous 60 FPS compositor triggers while decoding HEIC/PDF
     if (hasHeicOrPdf) {
-        if (glowBgEl) glowBgEl.style.display = 'none';   // Disable blur(120px) background passes
-        if (DOM.btnConvert) DOM.btnConvert.classList.remove('btn-glow-active'); // Stop pulse shadow calculations
         await new Promise(r => setTimeout(r, 16));
     }
 
@@ -1352,6 +1512,16 @@ async function processFiles(files) {
         const allRecords = resultsArray.flat().filter(rec => rec !== null && rec !== undefined);
 
         if (allRecords.length > 0) {
+            if (STATE.settings.batchQuality !== 'custom') {
+                const presetQ = parseInt(STATE.settings.batchQuality || '100', 10);
+                if (!isNaN(presetQ) && presetQ !== 100) {
+                    allRecords.forEach(rec => {
+                        rec.quality = presetQ;
+                        rec.exactPdfSize = null;
+                        rec.sizeFingerprint = null;
+                    });
+                }
+            }
             STATE.files.push(...allRecords);
             STATE.activePageIdx = STATE.files.length - 1;
             if (STATE.files.length > 50) {
@@ -1364,10 +1534,6 @@ async function processFiles(files) {
     } finally {
         DOM.fileInput.value = '';
         updateStickyProgress(false);
-        if (glowBgEl) glowBgEl.style.display = '';
-        if (DOM.btnConvert && STATE.files.length > 0) {
-            DOM.btnConvert.classList.add('btn-glow-active');
-        }
     }
 }
 if (typeof window !== 'undefined') window.processFiles = processFiles;
@@ -1471,11 +1637,52 @@ function revokeFileObjectUrls(fileObj) {
     }
 }
 
+let _undoStash = null;
+
+function flushUndoStash() {
+    if (!_undoStash) return;
+    if (_undoStash.timer) clearTimeout(_undoStash.timer);
+    _undoStash.entries.forEach(entry => revokeFileObjectUrls(entry.fileObj));
+    _undoStash = null;
+}
+
+function stashRemovedFiles(entries, prevActiveIdx, label) {
+    flushUndoStash();
+    const timer = setTimeout(() => {
+        flushUndoStash();
+    }, 7000);
+    _undoStash = { entries, prevActiveIdx, timer };
+    showToast(label, {
+        type: 'info',
+        actionLabel: 'Undo',
+        duration: 6500,
+        onAction: () => {
+            if (!_undoStash) return;
+            if (_undoStash.timer) clearTimeout(_undoStash.timer);
+            const sorted = [..._undoStash.entries].sort((a, b) => a.index - b.index);
+            sorted.forEach(entry => {
+                const insertAt = Math.max(0, Math.min(entry.index, STATE.files.length));
+                STATE.files.splice(insertAt, 0, entry.fileObj);
+            });
+            STATE.activePageIdx = Math.max(0, Math.min(_undoStash.prevActiveIdx, STATE.files.length - 1));
+            _undoStash = null;
+            STATE.compiledCache = null;
+            updateUIState();
+            recalculateEstimatedPDFSize();
+            showToast('Restored removed items', { type: 'success' });
+        }
+    });
+}
+
 function clearAllFiles() {
-    STATE.files.forEach(revokeFileObjectUrls);
+    if (STATE.files.length === 0) return;
+    const entries = STATE.files.map((fileObj, index) => ({ index, fileObj }));
+    const prevActive = STATE.activePageIdx;
     STATE.files = [];
     STATE.activePageIdx = 0;
+    STATE.compiledCache = null;
     updateUIState();
+    stashRemovedFiles(entries, prevActive, `Cleared ${entries.length} item${entries.length > 1 ? 's' : ''}`);
 }
 
 /* ==========================================================================
@@ -1491,13 +1698,15 @@ function updateUIState() {
     const tabBtnPreview = document.getElementById('tabBtnPreview');
 
     if (fileCount === 0) {
+        if (DOM.emptyStateHero) {
+            DOM.emptyStateHero.style.display = 'flex';
+        }
         if (DOM.imageListCard) {
             DOM.imageListCard.style.display = 'none';
             DOM.imageListCard.setAttribute('data-active-tab', 'files');
         }
         if (tabBtnFiles) tabBtnFiles.classList.add('active');
         if (tabBtnPreview) tabBtnPreview.classList.remove('active');
-        if (DOM.btnConvert) DOM.btnConvert.disabled = true;
 
         if (DOM.btnStickyExportPdf) DOM.btnStickyExportPdf.disabled = true;
         if (DOM.btnStickySaveImages) DOM.btnStickySaveImages.disabled = true;
@@ -1514,8 +1723,10 @@ function updateUIState() {
             DOM.sizeIndicatorGroup.style.display = 'none';
         }
     } else {
+        if (DOM.emptyStateHero) {
+            DOM.emptyStateHero.style.display = 'none';
+        }
         DOM.imageListCard.style.display = 'flex';
-        if (DOM.btnConvert) DOM.btnConvert.disabled = STATE.compiling;
         DOM.previewPlaceholder.style.display = 'none';
 
         if (!STATE.compiling) {
@@ -1535,6 +1746,7 @@ function updateUIState() {
         renderUploadedGrid();
         renderVirtualLayoutPreview();
     }
+    syncGlobalQualityDropdown();
 }
 
 function renderUploadedGrid() {
@@ -1572,7 +1784,7 @@ function renderUploadedGrid() {
                             <span class="meta-divider"></span>
                             <span class="meta-text" title="Original File Size">${fileObj.sizeText}</span>
                             <span class="meta-divider"></span>
-                            <span class="badge individual-pdf-size-badge" data-index="${index}" style="background-color: rgba(139, 92, 246, 0.08); color: var(--accent-solid); font-weight: 600;" title="Estimated PDF size for this page">
+                            <span class="badge individual-pdf-size-badge" data-index="${index}" title="Estimated PDF size for this page">
                                 <span class="size-label">Size:</span>
                                 <span class="size-number">${individualSize ? formatFileSize(individualSize).split(' ')[0] : '0'}</span>
                                 <span class="size-unit">${individualSize ? formatFileSize(individualSize).split(' ')[1] : 'KB'}</span>
@@ -1646,6 +1858,7 @@ function renderUploadedGrid() {
         // Trigger compression strictly on 'change' (when user lifts their finger or releases mouse button)
         // Eliminates all mid-drag jank and computes real output size rapidly in a single pass
         inlineSlider.addEventListener('change', () => {
+            syncGlobalQualityDropdown();
             debouncedRecalculate(parseInt(inlineSlider.getAttribute('data-index')), 0);
         });
 
@@ -1669,8 +1882,7 @@ function renderUploadedGrid() {
         });
 
         if (index === STATE.activePageIdx) {
-            item.style.borderColor = 'var(--accent-solid)';
-            item.style.backgroundColor = 'rgba(139, 92, 246, 0.04)';
+            item.classList.add('is-active');
         }
 
         item.addEventListener('click', (e) => {
@@ -1785,12 +1997,16 @@ function swapFiles(idxA, idxB) {
 }
 
 function removeFile(index) {
+    const fileObj = STATE.files[index];
+    if (!fileObj) return;
+    const prevActive = STATE.activePageIdx;
     const removed = STATE.files.splice(index, 1)[0];
-    revokeFileObjectUrls(removed);
     if (STATE.activePageIdx >= STATE.files.length) {
         STATE.activePageIdx = Math.max(0, STATE.files.length - 1);
     }
+    STATE.compiledCache = null;
     updateUIState();
+    stashRemovedFiles([{ index, fileObj: removed }], prevActive, `Removed "${removed.name}"`);
 }
 
 function renderVirtualLayoutPreview() {
@@ -1868,6 +2084,15 @@ function renderVirtualLayoutPreview() {
     }
 
     sheet.appendChild(imgElement);
+
+    const watermarkStr = (STATE.settings.watermarkText || '').trim();
+    if (watermarkStr) {
+        const watermarkEl = document.createElement('div');
+        watermarkEl.className = 'virtual-watermark-overlay';
+        watermarkEl.textContent = watermarkStr;
+        sheet.appendChild(watermarkEl);
+    }
+
     DOM.virtualPreviewCanvas.appendChild(sheet);
 
     if (STATE.files.length > 1) {
@@ -1909,8 +2134,6 @@ function closeAllStickyDropdowns() {
 }
 
 function updateStickyProgress(show, text = '') {
-    const glowBgEl = document.getElementById('glowBg');
-
     const barContainer = DOM.stickyBarContainer || document.querySelector('.sticky-bar-container');
     if (barContainer) {
         const isCurrently = barContainer.classList.contains('is-processing');
@@ -1925,27 +2148,10 @@ function updateStickyProgress(show, text = '') {
     if (DOM.stickyProgressText && text && DOM.stickyProgressText.textContent !== text) {
         DOM.stickyProgressText.textContent = text;
     }
-
-    if (DOM.btnConvert) {
-        if (show) {
-            DOM.btnConvert.disabled = true;
-            // Kill heavy GPU compositor filters while compiling
-            if (glowBgEl) glowBgEl.style.display = 'none';
-            DOM.btnConvert.classList.remove('btn-glow-active');
-        } else {
-            DOM.btnConvert.disabled = STATE.files.length === 0;
-            // Restore effects when idle
-            if (glowBgEl) glowBgEl.style.display = '';
-            if (STATE.files.length > 0) {
-                DOM.btnConvert.classList.add('btn-glow-active');
-            }
-        }
-    }
 }
 function setStickyActionsDisabled(disabled) {
     if (DOM.btnStickyExportPdf) DOM.btnStickyExportPdf.disabled = disabled;
     if (DOM.btnStickySaveImages) DOM.btnStickySaveImages.disabled = disabled;
-    if (DOM.btnConvert) DOM.btnConvert.disabled = disabled || STATE.files.length === 0;
 }
 
 // 1st: Export PDF -> Single PDF (Multi-page)
@@ -1989,12 +2195,13 @@ async function exportSinglePDF() {
         }
 
         if (compiledResult && compiledResult.doc) {
-            compiledResult.doc.save('pictopdf_compiled.pdf');
-            showToast('Single PDF exported successfully!');
+            const pdfName = `${getCustomBaseFilename('pictopdf_compiled')}.pdf`;
+            compiledResult.doc.save(pdfName);
+            showToast(`Exported ${pdfName}`, { type: 'success' });
         }
     } catch (err) {
         console.error('Export Single PDF failed:', err);
-        alert('An error occurred while compiling your Single PDF.');
+        showToast('An error occurred while compiling your Single PDF.', { type: 'error' });
     } finally {
         STATE.compiling = false;
         updateStickyProgress(false);
@@ -2022,10 +2229,11 @@ async function exportSeparatePDFs() {
 
         if (compiledResult && compiledResult.docs) {
             const total = compiledResult.docs.length;
+            const customBase = (STATE.settings.outputFilename || '').trim() ? getCustomBaseFilename('') : '';
             for (let i = 0; i < total; i++) {
                 const imgData = STATE.files[i] || {};
-                const cleanName = (imgData.name || `page_${i + 1}`).replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').trim().replace(/\s+/g, "_") || `page_${i + 1}`;
-                const fileName = total > 1 ? `${cleanName}_page_${i + 1}.pdf` : `${cleanName}_converted.pdf`;
+                const cleanName = customBase || (imgData.name || `page_${i + 1}`).replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').trim().replace(/\s+/g, "_") || `page_${i + 1}`;
+                const fileName = total > 1 ? `${cleanName}_page_${i + 1}.pdf` : `${cleanName}${customBase ? '' : '_converted'}.pdf`;
                 updateStickyProgress(true, `Saving PDF ${i + 1} of ${total}...`);
 
                 const blob = (compiledResult.blobs && compiledResult.blobs[i])
@@ -2044,11 +2252,11 @@ async function exportSeparatePDFs() {
                     await delay(350);
                 }
             }
-            showToast(`Exported ${total} separate PDF${total > 1 ? 's' : ''}!`);
+            showToast(`Exported ${total} separate PDF${total > 1 ? 's' : ''}!`, { type: 'success' });
         }
     } catch (err) {
         console.error('Export Separate PDFs failed:', err);
-        alert('An error occurred while compiling separate PDFs.');
+        showToast('An error occurred while compiling separate PDFs.', { type: 'error' });
     } finally {
         STATE.compiling = false;
         updateStickyProgress(false);
@@ -2092,13 +2300,14 @@ async function saveSeparateImages() {
 
     try {
         const total = STATE.files.length;
+        const customBase = (STATE.settings.outputFilename || '').trim() ? getCustomBaseFilename('') : '';
         for (let i = 0; i < total; i++) {
             const fileObj = STATE.files[i];
             updateStickyProgress(true, `Saving image ${i + 1} of ${total}...`);
 
             const quality = fileObj.quality || 100;
-            const cleanName = (fileObj.name || `image_${i + 1}`).replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').trim().replace(/\s+/g, "_") || `image_${i + 1}`;
-            const fileName = total > 1 ? `${cleanName}_${i + 1}.jpg` : `${cleanName}_extracted.jpg`;
+            const cleanName = customBase || (fileObj.name || `image_${i + 1}`).replace(/\.[^/.]+$/, "").replace(/[^\w\s-]/gi, '').trim().replace(/\s+/g, "_") || `image_${i + 1}`;
+            const fileName = total > 1 ? `${cleanName}_${i + 1}.jpg` : `${cleanName}${customBase ? '' : '_extracted'}.jpg`;
 
             let downloadUrl = null;
             let revokeNeeded = false;
@@ -2145,10 +2354,10 @@ async function saveSeparateImages() {
                 await delay(350);
             }
         }
-        showToast(`Saved ${total} separate JPG image${total > 1 ? 's' : ''}!`);
+        showToast(`Saved ${total} separate JPG image${total > 1 ? 's' : ''}!`, { type: 'success' });
     } catch (err) {
         console.error('Save Separate Images failed:', err);
-        alert('An error occurred while saving JPG images.');
+        showToast('An error occurred while saving JPG images.', { type: 'error' });
     } finally {
         STATE.compiling = false;
         updateStickyProgress(false);
@@ -2164,7 +2373,7 @@ async function saveZipImages() {
     closeAllStickyDropdowns();
 
     if (typeof JSZip === 'undefined') {
-        alert('JSZip library is not loaded. Please refresh the page and try again.');
+        showToast('JSZip library is not loaded. Please refresh and try again.', { type: 'error' });
         return;
     }
 
@@ -2227,32 +2436,24 @@ async function saveZipImages() {
             }
         );
 
+        const zipName = `${getCustomBaseFilename('pictopdf_images')}.zip`;
         const link = document.createElement('a');
         link.href = URL.createObjectURL(zipBlob);
-        link.download = 'pictopdf_images.zip';
+        link.download = zipName;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
         setTimeout(() => URL.revokeObjectURL(link.href), 15000);
 
-        showToast(`Saved all ${total} images in pictopdf_images.zip!`);
+        showToast(`Saved ${total} images in ${zipName}`, { type: 'success' });
     } catch (err) {
         console.error('Save Zip Images failed:', err);
-        alert('An error occurred while creating the ZIP archive.');
+        showToast('An error occurred while creating the ZIP archive.', { type: 'error' });
     } finally {
         STATE.compiling = false;
         updateStickyProgress(false);
         setStickyActionsDisabled(false);
         updateUIState();
-    }
-}
-
-async function convertImagesToPDF() {
-    if (STATE.files.length === 0 || STATE.compiling) return;
-    if (STATE.settings.mergeMode === 'single') {
-        await exportSinglePDF();
-    } else {
-        await exportSeparatePDFs();
     }
 }
 
@@ -2309,7 +2510,7 @@ async function downloadSingleImage(index) {
         }
     } catch (err) {
         console.error("Failed to download image:", err);
-        alert("Failed to download image. Check console details.");
+        showToast("Failed to download image. Please try again.", { type: 'error' });
     }
 }
 
@@ -3408,11 +3609,17 @@ function initEditEvents() {
     }
 
     window.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && DOM.editModal && DOM.editModal.style.display !== 'none') {
+        if (!DOM.editModal || DOM.editModal.style.display === 'none') return;
+        if (e.key === 'Escape') {
             if (DOM.editModal.classList.contains('fullscreen-mode')) {
                 toggleFullscreenFunc();
             } else {
                 closeEditInterface();
+            }
+        } else if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            if (DOM.btnApplyEdit && !DOM.btnApplyEdit.disabled) {
+                e.preventDefault();
+                applyImageEdits();
             }
         }
     });
@@ -3988,7 +4195,7 @@ async function downloadSinglePDF(index) {
         doc.save(`${originalName}_PicToPDF.pdf`);
     } catch (err) {
         console.error("Failed to generate single PDF", err);
-        alert("Failed to generate PDF for this image.");
+        showToast("Failed to generate PDF for this image.", { type: 'error' });
     }
 
     updateUIState();

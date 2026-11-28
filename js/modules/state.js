@@ -18,7 +18,9 @@ export const STATE = {
         mergeMode: 'single',     // 'single' (one combined PDF) or 'separate' (separate files)
         enablePassword: false,   // Whether password protection is enabled
         pdfPassword: '',         // The password for encryption
-        watermarkText: ''        // Custom text to stamp diagonally on every page
+        watermarkText: '',       // Custom text to stamp diagonally on every page
+        outputFilename: '',      // Optional custom export filename
+        batchQuality: '100'      // Batch quality preset ('100', '85', '70', '50', 'custom')
     }
 };
 
@@ -29,11 +31,16 @@ if (typeof window !== 'undefined') {
 // DOM Cache Elements
 export const DOM = {
     body: document.body,
+    btnThemeToggle: document.getElementById('btnThemeToggle'),
     dropZone: document.getElementById('dropZone'),
     globalDropOverlay: document.getElementById('globalDropOverlay'),
     fileInput: document.getElementById('fileInput'),
     btnBrowse: document.getElementById('btnBrowse'),
     btnPaste: document.getElementById('btnPaste'),
+    emptyStateHero: document.getElementById('emptyStateHero'),
+    heroDropTarget: document.getElementById('heroDropTarget'),
+    heroBtnBrowse: document.getElementById('heroBtnBrowse'),
+    heroBtnPaste: document.getElementById('heroBtnPaste'),
     imageListCard: document.getElementById('imageListCard'),
     imageListContainer: document.getElementById('imageListContainer'),
     fileCount: document.getElementById('fileCount'),
@@ -48,7 +55,6 @@ export const DOM = {
     totalPreviewPages: document.getElementById('totalPreviewPages'),
     prevPreview: document.getElementById('prevPreview'),
     nextPreview: document.getElementById('nextPreview'),
-    btnConvert: document.getElementById('btnConvert'),
     sizeIndicatorGroup: document.getElementById('sizeIndicatorGroup'),
     estimatedPdfSize: document.getElementById('estimatedPdfSize'),
     settingsHeader: document.getElementById('settingsHeader'),
@@ -58,6 +64,8 @@ export const DOM = {
     passwordInputContainer: document.getElementById('passwordInputContainer'),
     pdfPassword: document.getElementById('pdfPassword'),
     watermarkText: document.getElementById('watermarkText'),
+    outputFilename: document.getElementById('outputFilename'),
+    globalQuality: document.getElementById('globalQuality'),
 
     // Bottom Sticky Action Bar Elements
     bottomStickyBar: document.getElementById('bottomStickyBar'),
