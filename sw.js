@@ -1,19 +1,21 @@
-const CACHE_NAME = 'pictopdf-v1';
+const CACHE_NAME = 'pictopdf-v2';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
-  './styles.css?v=68',
-  './app.js?v=72',
+  './css/styles.css?v=69',
+  './js/app.js?v=73',
   './manifest.json',
-  './favicon.svg',
-  './icon-192.png',
-  './icon-512.png',
-  './lucide.min.js',
-  './libheif-bundle.js?v=60',
-  './heic-to.js?v=60',
-  './jspdf.umd.min.js',
-  './pdf.min.js',
-  './jszip.min.js'
+  './assets/favicon.svg',
+  './assets/icons/icon-192.png',
+  './assets/icons/icon-512.png',
+  './lib/lucide.min.js',
+  './lib/libheif-bundle.js?v=60',
+  './lib/heic-to.js?v=60',
+  './lib/jspdf.umd.min.js',
+  './lib/pdf.min.js',
+  './lib/jszip.min.js',
+  './lib/pdf.worker.min.js',
+  './lib/heic-worker.js?v=60'
 ];
 
 self.addEventListener('install', (event) => {
