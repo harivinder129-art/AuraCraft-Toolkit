@@ -3993,3 +3993,11 @@ async function downloadSinglePDF(index) {
 
     updateUIState();
 }
+
+// Expose card action functions to window for inline onclick handlers in ES modules
+window.openEditInterface = openEditInterface;
+window.downloadSingleImage = downloadSingleImage;
+window.downloadSinglePDF = downloadSinglePDF;
+window.resetEdits = resetEdits;
+window.swapFiles = swapFiles;
+window.removeFile = removeFile;
